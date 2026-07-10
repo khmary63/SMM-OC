@@ -30,6 +30,18 @@ apt-get install -y -qq git curl ca-certificates >/dev/null
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh >/dev/null
 fi
+
+# Зеркала Docker Hub: registry-1.docker.io часто отвечает 429/блокируется из РФ
+if [ ! -f /etc/docker/daemon.json ] || ! grep -q registry-mirrors /etc/docker/daemon.json; then
+  mkdir -p /etc/docker
+  cat > /etc/docker/daemon.json <<'JSON'
+{
+  "registry-mirrors": ["https://dockerhub.timeweb.cloud", "https://mirror.gcr.io"]
+}
+JSON
+  systemctl restart docker >/dev/null 2>&1 || true
+fi
+
 systemctl enable --now docker >/dev/null 2>&1 || true
 docker compose version >/dev/null 2>&1 || fail "docker compose plugin не установился."
 
