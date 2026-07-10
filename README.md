@@ -22,7 +22,22 @@ docs/                      Архитектура и спецификации
 docker-compose.yml         n8n + микросервисы
 ```
 
-## Быстрый старт
+## Развёртывание на сервере одной командой
+
+На чистом Ubuntu/Debian VPS (например, Timeweb) под root:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/khmary63/SMM-OC/claude/platform-creation-vrft60/deploy/bootstrap.sh)
+```
+
+Скрипт установит Docker, склонирует репозиторий в `/opt/maria-smm-os`, спросит
+ключи Supabase и Anthropic и поднимет всё: веб-приложение на порту 80, n8n на 5678,
+Telegram-collector и video-worker. Повторный запуск обновляет систему.
+
+Перед первым входом примените миграции из `supabase/migrations/` в вашем
+Supabase-проекте и добавьте адрес сервера в Auth → URL Configuration.
+
+## Быстрый старт (локальная разработка)
 
 ### 1. Supabase
 

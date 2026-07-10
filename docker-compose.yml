@@ -1,8 +1,29 @@
-# MARIA SMM OS — инфраструктура автоматизации.
-# Веб-приложение (apps/web) деплоится отдельно (Vercel или node),
-# база — облачный Supabase.
+# MARIA SMM OS — полное развёртывание на одном сервере:
+# веб-приложение + n8n + микросервисы. База — облачный Supabase.
+# Переменные берутся из файла .env рядом с этим файлом.
 
 services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    restart: unless-stopped
+    ports:
+      - "80:3000"
+    environment:
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - AI_MODEL=${AI_MODEL:-claude-sonnet-5}
+      - APP_BASE_URL=${APP_BASE_URL:-http://localhost}
+      - N8N_WEBHOOK_URL=http://n8n:5678/webhook/smm-os/jobs
+      - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
+    depends_on:
+      - n8n
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
