@@ -23,7 +23,7 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl import functions
 
-API_ID = int(os.environ.get("TELEGRAM_API_ID", "0"))
+API_ID = int(os.environ.get("TELEGRAM_API_ID") or 0)
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
 SESSION = os.environ.get("TELEGRAM_SESSION", "")
 TOKEN = os.environ.get("TELEGRAM_STATS_TOKEN", "")
