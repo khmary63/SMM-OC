@@ -1,0 +1,175 @@
+{
+  "name": "WF-CORE-003 — Automation Job Dispatcher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 1 }] }
+      },
+      "id": "schedule",
+      "name": "Every Minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from app_private.claim_automation_jobs($1, null, 10);",
+        "options": {
+          "queryReplacement": "={{ [$env.WORKER_NAME ?? 'n8n-main'] }}"
+        }
+      },
+      "id": "claim",
+      "name": "Claim Jobs (SKIP LOCKED)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [220, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.job_type }}",
+                    "rightValue": "publish",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "publish"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.job_type }}",
+                    "rightValue": "collect",
+                    "operator": { "type": "string", "operation": "startsWith" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "metrics"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "typeValidation": "strict", "version": 2 },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.job_type }}",
+                    "rightValue": "generate",
+                    "operator": { "type": "string", "operation": "startsWith" }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "content-analytics"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "router",
+      "name": "Route by job_type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_PUB_001_ID",
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "call-pub",
+      "name": "Execute WF-PUB-001",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [680, -160]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_METRIC_ROUTER_ID",
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "call-metrics",
+      "name": "Execute Metric Collector",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [680, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_CONTENT_WF_ID",
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "call-content",
+      "name": "Execute Content/Analytics WF",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [680, 160]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update public.automation_jobs\n   set status = 'succeeded', result = $2::jsonb, locked_at = null, locked_by = null, updated_at = now()\n where id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [$json.id, JSON.stringify($json.result ?? {})] }}"
+        }
+      },
+      "id": "complete",
+      "name": "Mark Succeeded",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [920, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Minute": {
+      "main": [[{ "node": "Claim Jobs (SKIP LOCKED)", "type": "main", "index": 0 }]]
+    },
+    "Claim Jobs (SKIP LOCKED)": {
+      "main": [[{ "node": "Route by job_type", "type": "main", "index": 0 }]]
+    },
+    "Route by job_type": {
+      "main": [
+        [{ "node": "Execute WF-PUB-001", "type": "main", "index": 0 }],
+        [{ "node": "Execute Metric Collector", "type": "main", "index": 0 }],
+        [{ "node": "Execute Content/Analytics WF", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Execute WF-PUB-001": {
+      "main": [[{ "node": "Mark Succeeded", "type": "main", "index": 0 }]]
+    },
+    "Execute Metric Collector": {
+      "main": [[{ "node": "Mark Succeeded", "type": "main", "index": 0 }]]
+    },
+    "Execute Content/Analytics WF": {
+      "main": [[{ "node": "Mark Succeeded", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "WF-CORE-001"
+  }
+}

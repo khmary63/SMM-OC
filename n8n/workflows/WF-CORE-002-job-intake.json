@@ -1,0 +1,73 @@
+{
+  "name": "WF-CORE-002 — Automation Job Intake",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smm-os/jobs",
+        "responseMode": "responseNode",
+        "options": { "rawBody": true }
+      },
+      "id": "webhook",
+      "name": "Webhook /smm-os/jobs",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Проверка HMAC-подписи (x-smm-signature) и обязательных полей\nconst crypto = require('crypto');\nconst raw = Buffer.isBuffer($input.first().binary?.data?.data)\n  ? $input.first().binary.data.data.toString()\n  : JSON.stringify($input.first().json.body ?? $input.first().json);\nconst headers = $input.first().json.headers ?? {};\nconst signature = headers['x-smm-signature'];\nconst secret = $env.N8N_WEBHOOK_TOKEN;\n\nif (!secret) throw new Error('N8N_WEBHOOK_TOKEN is not configured');\nconst expected = crypto.createHmac('sha256', secret).update(raw).digest('hex');\nif (!signature || signature !== expected) {\n  throw new Error('Invalid HMAC signature');\n}\n\nconst body = typeof raw === 'string' ? JSON.parse(raw) : raw;\nfor (const field of ['workspace_id', 'job_type', 'idempotency_key']) {\n  if (!body[field]) throw new Error(`Missing required field: ${field}`);\n}\n\nreturn [{ json: body }];"
+      },
+      "id": "validate",
+      "name": "Validate HMAC + Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into public.automation_jobs\n  (workspace_id, job_type, entity_type, entity_id, payload, idempotency_key)\nvalues ($1::uuid, $2, $3, $4::uuid, $5::jsonb, $6)\non conflict (idempotency_key) do update set updated_at = now()\nreturning id as job_id, status;",
+        "options": {
+          "queryReplacement": "={{ [$json.workspace_id, $json.job_type, $json.entity_type ?? null, $json.entity_id ?? null, JSON.stringify($json.payload ?? {}), $json.idempotency_key] }}"
+        }
+      },
+      "id": "upsert",
+      "name": "Upsert automation_jobs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { job_id: $json.job_id, status: $json.status } }}"
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [660, 0]
+    }
+  ],
+  "connections": {
+    "Webhook /smm-os/jobs": {
+      "main": [[{ "node": "Validate HMAC + Fields", "type": "main", "index": 0 }]]
+    },
+    "Validate HMAC + Fields": {
+      "main": [[{ "node": "Upsert automation_jobs", "type": "main", "index": 0 }]]
+    },
+    "Upsert automation_jobs": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "WF-CORE-001"
+  }
+}

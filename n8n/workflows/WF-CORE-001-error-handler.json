@@ -1,0 +1,75 @@
+{
+  "name": "WF-CORE-001 — Global Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Нормализация ошибки: не сохраняем токены и секреты в payload\nconst e = $input.first().json;\nconst execution = e.execution ?? {};\nconst workflow = e.workflow ?? {};\nconst lastNode = execution.lastNodeExecuted ?? null;\nconst message = (e.error?.message ?? execution.error?.message ?? 'unknown error').slice(0, 2000);\n\nconst runData = execution.data?.resultData?.runData ?? {};\nlet workspaceId = null;\nlet jobId = null;\nfor (const nodeName of Object.keys(runData)) {\n  for (const run of runData[nodeName] ?? []) {\n    const items = run?.data?.main?.[0] ?? [];\n    for (const item of items) {\n      workspaceId = workspaceId ?? item?.json?.workspace_id ?? null;\n      jobId = jobId ?? item?.json?.job_id ?? item?.json?.id ?? null;\n    }\n  }\n}\n\nreturn [{ json: {\n  workflow_name: workflow.name ?? null,\n  execution_id: execution.id ?? null,\n  last_node: lastNode,\n  error_message: message,\n  workspace_id: workspaceId,\n  job_id: jobId,\n  occurred_at: new Date().toISOString(),\n}}];"
+      },
+      "id": "normalize",
+      "name": "Normalize Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update public.automation_jobs\n   set status = case when attempts >= max_attempts then 'failed' else 'pending' end,\n       run_after = now() + make_interval(mins => least(60, power(2, attempts)::int)),\n       last_error = $1,\n       locked_at = null,\n       locked_by = null,\n       updated_at = now()\n where id = $2::uuid\n returning id, status, attempts;",
+        "options": {
+          "queryReplacement": "={{ [$json.error_message, $json.job_id] }}"
+        }
+      },
+      "id": "mark-job",
+      "name": "Mark Job Failed / Schedule Retry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into public.audit_logs (workspace_id, event_type, entity_type, entity_id, new_data)\nvalues ($1::uuid, 'integration.failed', 'automation_job', $2::uuid, $3::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [$('Normalize Error').item.json.workspace_id, $('Normalize Error').item.json.job_id, JSON.stringify($('Normalize Error').item.json)] }}"
+        }
+      },
+      "id": "audit",
+      "name": "Write Audit Log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [660, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [[{ "node": "Normalize Error", "type": "main", "index": 0 }]]
+    },
+    "Normalize Error": {
+      "main": [[{ "node": "Mark Job Failed / Schedule Retry", "type": "main", "index": 0 }]]
+    },
+    "Mark Job Failed / Schedule Retry": {
+      "main": [[{ "node": "Write Audit Log", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {}
+}

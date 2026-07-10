@@ -1,0 +1,52 @@
+# MARIA SMM OS — инфраструктура автоматизации.
+# Веб-приложение (apps/web) деплоится отдельно (Vercel или node),
+# база — облачный Supabase.
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - WEBHOOK_URL=${N8N_PUBLIC_BASE_URL:-http://localhost:5678}
+      - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
+      - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
+      - WORKER_NAME=n8n-main
+      # workflow-переменные (см. n8n/README.md)
+      - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - TELEGRAM_STATS_URL=http://telegram-collector:8081
+      - TELEGRAM_STATS_TOKEN=${TELEGRAM_STATS_TOKEN}
+      - VIDEO_RENDER_URL=http://video-worker:8082
+      - VIDEO_RENDER_TOKEN=${VIDEO_RENDER_TOKEN}
+      - MAX_API_BASE_URL=${MAX_API_BASE_URL:-https://botapi.max.ru}
+      # Production: сокращаем хранение execution data (§7 реестра workflow)
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  telegram-collector:
+    build: ./services/telegram-collector
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_SESSION=${TELEGRAM_SESSION}
+      - TELEGRAM_STATS_TOKEN=${TELEGRAM_STATS_TOKEN}
+
+  video-worker:
+    build: ./services/video-worker
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      - VIDEO_RENDER_TOKEN=${VIDEO_RENDER_TOKEN}
+
+volumes:
+  n8n_data:

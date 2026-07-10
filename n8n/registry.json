@@ -1,0 +1,748 @@
+{
+  "product": "MARIA SMM OS",
+  "version": "1.0",
+  "generated_at": "2026-07-10",
+  "conventions": {
+    "job_table": "public.automation_jobs",
+    "publication_table": "public.publications",
+    "error_workflow": "WF-CORE-001",
+    "idempotency_required": true,
+    "secrets_in_execution_data": false
+  },
+  "workflows": [
+    {
+      "id": "WF-CORE-001",
+      "name": "Global Error Handler",
+      "group": "CORE",
+      "priority": "MVP",
+      "trigger": "Error Trigger",
+      "input": [
+        "workflow",
+        "execution",
+        "error"
+      ],
+      "steps": [
+        "Нормализовать ошибку",
+        "Определить workspace_id и entity_id из execution data",
+        "Записать failure в automation_jobs/publication_attempts",
+        "Рассчитать retry policy",
+        "Создать notification",
+        "Отправить техническое уведомление владельцу"
+      ],
+      "output": [
+        "error persisted",
+        "retry scheduled or dead-letter"
+      ],
+      "notes": "Назначается error workflow для всех production workflows."
+    },
+    {
+      "id": "WF-CORE-002",
+      "name": "Automation Job Intake",
+      "group": "CORE",
+      "priority": "MVP",
+      "trigger": "Webhook POST /smm-os/jobs",
+      "input": [
+        "workspace_id",
+        "job_type",
+        "entity_type",
+        "entity_id",
+        "payload",
+        "idempotency_key"
+      ],
+      "steps": [
+        "Проверить HMAC/service token",
+        "Проверить обязательные поля",
+        "Upsert automation_jobs по idempotency_key",
+        "Вернуть job_id и текущий status"
+      ],
+      "output": [
+        "job_id",
+        "status"
+      ],
+      "notes": "Webhook отвечает быстро; тяжёлая работа выполняется асинхронно."
+    },
+    {
+      "id": "WF-CORE-003",
+      "name": "Automation Job Dispatcher",
+      "group": "CORE",
+      "priority": "MVP",
+      "trigger": "Schedule Trigger every minute",
+      "input": [
+        "pending automation_jobs"
+      ],
+      "steps": [
+        "Claim jobs через SELECT ... FOR UPDATE SKIP LOCKED / RPC",
+        "Разделить по job_type",
+        "Вызвать соответствующий sub-workflow",
+        "Обновить result/status",
+        "Освободить lock"
+      ],
+      "output": [
+        "processed jobs"
+      ],
+      "notes": "Страхует систему от потерянных webhook и перезапуска n8n."
+    },
+    {
+      "id": "WF-CONTENT-001",
+      "name": "Generate Content Copy",
+      "group": "CONTENT",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow: job_type=generate_copy",
+      "input": [
+        "brand_id",
+        "content_item_id",
+        "target_channels",
+        "generation_options"
+      ],
+      "steps": [
+        "Загрузить brand_profile и релевантные прошлые материалы",
+        "Загрузить цель, рубрику и формат",
+        "Собрать versioned prompt",
+        "Вызвать AI Gateway",
+        "Проверить Structured Output",
+        "Проверить запрещённые фразы",
+        "Создать content_variants",
+        "Сохранить provider/model/token metadata"
+      ],
+      "output": [
+        "content_variant_ids"
+      ],
+      "notes": "Никогда не переводит материал в approved автоматически."
+    },
+    {
+      "id": "WF-CONTENT-002",
+      "name": "Generate Image",
+      "group": "CONTENT",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow: job_type=generate_image",
+      "input": [
+        "brand_id",
+        "content_variant_id",
+        "prompt",
+        "dimensions",
+        "provider"
+      ],
+      "steps": [
+        "Загрузить визуальные правила бренда",
+        "Сформировать provider-neutral request",
+        "Вызвать image provider через AI Gateway",
+        "Скачать результат",
+        "Проверить MIME, размер и checksum",
+        "Загрузить в Storage",
+        "Создать assets и content_assets"
+      ],
+      "output": [
+        "asset_ids"
+      ],
+      "notes": "Провайдер выбирается настройкой, а не логикой workflow."
+    },
+    {
+      "id": "WF-CONTENT-003",
+      "name": "Render Short Video",
+      "group": "CONTENT",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow: job_type=render_video",
+      "input": [
+        "template_id",
+        "content_variant_id",
+        "asset_ids",
+        "render_options"
+      ],
+      "steps": [
+        "Проверить шаблон и медиа",
+        "Сформировать render manifest",
+        "Вызвать Remotion/FFmpeg worker",
+        "Опросить render status",
+        "Загрузить MP4 и thumbnail в Storage",
+        "Создать assets",
+        "Закрыть job"
+      ],
+      "output": [
+        "video_asset_id",
+        "thumbnail_asset_id"
+      ],
+      "notes": "Генеративное text-to-video подключается отдельным provider workflow."
+    },
+    {
+      "id": "WF-ASSET-001",
+      "name": "Asset Post-processing",
+      "group": "CONTENT",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow: job_type=process_asset",
+      "input": [
+        "asset_id",
+        "required_variants"
+      ],
+      "steps": [
+        "Получить signed source URL",
+        "Определить размеры и длительность",
+        "Создать crop/resize/thumbnail",
+        "Посчитать checksum",
+        "Сохранить производные assets",
+        "Обновить metadata"
+      ],
+      "output": [
+        "derived_asset_ids"
+      ],
+      "notes": "Не хранить временные бинарные файлы в execution history."
+    },
+    {
+      "id": "WF-APPROVAL-001",
+      "name": "Request Approval",
+      "group": "APPROVAL",
+      "priority": "MVP",
+      "trigger": "Webhook or job_type=request_approval",
+      "input": [
+        "content_variant_id",
+        "approver_user_id",
+        "version_no"
+      ],
+      "steps": [
+        "Проверить, что версия существует",
+        "Отменить устаревшие pending approvals",
+        "Создать approvals",
+        "Перевести variant в awaiting_approval",
+        "Создать notification",
+        "Отправить ссылку согласующему"
+      ],
+      "output": [
+        "approval_id"
+      ],
+      "notes": "Согласование привязано к конкретному version_no."
+    },
+    {
+      "id": "WF-APPROVAL-002",
+      "name": "Approval Decision",
+      "group": "APPROVAL",
+      "priority": "MVP",
+      "trigger": "Database/Webhook event after approval update",
+      "input": [
+        "approval_id",
+        "decision"
+      ],
+      "steps": [
+        "Проверить пользователя и версию",
+        "При approved обновить content_variant/content_item",
+        "При rejected установить revision_requested",
+        "Записать audit event",
+        "Уведомить ответственного"
+      ],
+      "output": [
+        "new content status"
+      ],
+      "notes": "Устаревшую версию нельзя согласовать после создания новой."
+    },
+    {
+      "id": "WF-PUB-001",
+      "name": "Publication Scheduler and Dispatcher",
+      "group": "PUBLICATION",
+      "priority": "MVP",
+      "trigger": "Schedule Trigger every minute + manual webhook",
+      "input": [
+        "queued publications due now"
+      ],
+      "steps": [
+        "Выбрать due publications",
+        "Захватить lock",
+        "Проверить approved version",
+        "Проверить channel/connection health",
+        "Проверить idempotency и external_post_id",
+        "Создать publication_attempt",
+        "Маршрутизировать по platform",
+        "Запустить reconciliation при неопределённом результате"
+      ],
+      "output": [
+        "platform workflow result"
+      ],
+      "notes": "Не делает blind retry после timeout."
+    },
+    {
+      "id": "WF-PUB-002",
+      "name": "Publish to VK",
+      "group": "PUBLICATION",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow from dispatcher",
+      "input": [
+        "publication_id"
+      ],
+      "steps": [
+        "Получить content variant, assets и connection",
+        "Получить server-side secret",
+        "Загрузить медиа по требованиям VK",
+        "Собрать wall payload",
+        "Вызвать VK API",
+        "Сохранить post_id и public URL",
+        "Установить published",
+        "Создать snapshot jobs"
+      ],
+      "output": [
+        "external_post_id",
+        "external_url"
+      ],
+      "notes": "Payload и API response сохраняются в publication_attempts."
+    },
+    {
+      "id": "WF-PUB-003",
+      "name": "Publish to Telegram",
+      "group": "PUBLICATION",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow from dispatcher",
+      "input": [
+        "publication_id"
+      ],
+      "steps": [
+        "Получить bot token server-side",
+        "Выбрать sendMessage/sendPhoto/sendVideo/sendMediaGroup",
+        "Проверить длину caption и formatting",
+        "Отправить материал",
+        "Сохранить message_id и URL",
+        "Установить published",
+        "Создать snapshot jobs"
+      ],
+      "output": [
+        "message_id",
+        "external_url"
+      ],
+      "notes": "Bot должен иметь право публикации в канале."
+    },
+    {
+      "id": "WF-PUB-004",
+      "name": "Publish to MAX",
+      "group": "PUBLICATION",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow from dispatcher",
+      "input": [
+        "publication_id"
+      ],
+      "steps": [
+        "Получить MAX token server-side",
+        "Проверить capability канала",
+        "Для видео/файла получить upload URL/token",
+        "Загрузить медиа",
+        "Вызвать POST messages",
+        "Сохранить mid и доступный URL",
+        "Установить published",
+        "Создать snapshot jobs"
+      ],
+      "output": [
+        "message_id",
+        "external_url"
+      ],
+      "notes": "Base URL задаётся переменной окружения и не зашивается в workflow."
+    },
+    {
+      "id": "WF-PUB-005",
+      "name": "Publication Reconciliation",
+      "group": "PUBLICATION",
+      "priority": "MVP",
+      "trigger": "job_type=reconcile_publication",
+      "input": [
+        "publication_id",
+        "last_attempt_id"
+      ],
+      "steps": [
+        "Получить request fingerprint",
+        "Проверить внешний пост по ID или доступному журналу",
+        "При найденном посте закрыть publication как published",
+        "При доказанном отсутствии вернуть queued",
+        "При неопределённости отправить на manual review"
+      ],
+      "output": [
+        "published|retry|manual_review"
+      ],
+      "notes": "Критическая защита от дублей."
+    },
+    {
+      "id": "WF-METRIC-001",
+      "name": "Daily Channel Metrics Dispatcher",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "Schedule Trigger hourly",
+      "input": [
+        "active channels"
+      ],
+      "steps": [
+        "Определить локальное время каждого канала",
+        "Выбрать каналы без snapshot за текущую local_date",
+        "Создать metric jobs",
+        "Маршрутизировать по platform"
+      ],
+      "output": [
+        "metric jobs"
+      ],
+      "notes": "Почасовой диспетчер корректно работает с разными часовыми поясами."
+    },
+    {
+      "id": "WF-METRIC-002",
+      "name": "Collect VK Channel Metrics",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow",
+      "input": [
+        "channel_id",
+        "local_date"
+      ],
+      "steps": [
+        "Проверить токен",
+        "Получить доступные channel/community metrics",
+        "Сохранить raw payload",
+        "Нормализовать поля",
+        "Upsert channel_metric_snapshots",
+        "Обновить last_successful_sync_at"
+      ],
+      "output": [
+        "channel snapshot id"
+      ],
+      "notes": "Недоступные значения записываются NULL."
+    },
+    {
+      "id": "WF-METRIC-003",
+      "name": "Schedule Post Metric Snapshots",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "After publication.succeeded",
+      "input": [
+        "publication_id",
+        "published_at"
+      ],
+      "steps": [
+        "Создать jobs для 1h, 6h, 24h, 72h, 7d, 30d",
+        "Использовать уникальные idempotency_key",
+        "Не создавать повторно существующие jobs"
+      ],
+      "output": [
+        "snapshot job ids"
+      ],
+      "notes": "run_after рассчитывается от фактического published_at."
+    },
+    {
+      "id": "WF-METRIC-004",
+      "name": "Collect VK Post Metrics",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "job_type=collect_post_metrics platform=vk",
+      "input": [
+        "publication_id",
+        "age_bucket"
+      ],
+      "steps": [
+        "Получить external_post_id",
+        "Запросить доступные post metrics",
+        "Сохранить raw payload",
+        "Нормализовать",
+        "Upsert post_metric_snapshots"
+      ],
+      "output": [
+        "post snapshot id"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "WF-METRIC-005",
+      "name": "Collect Telegram Channel Metrics",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "Execute Sub-workflow via MTProto service",
+      "input": [
+        "channel_id",
+        "local_date"
+      ],
+      "steps": [
+        "Проверить MTProto session health",
+        "Вызвать stats collector",
+        "Получить доступные channel stats",
+        "Сохранить raw payload",
+        "Upsert normalized snapshot"
+      ],
+      "output": [
+        "channel snapshot id"
+      ],
+      "notes": "Bot API не используется как источник полной channel analytics."
+    },
+    {
+      "id": "WF-METRIC-006",
+      "name": "Collect Telegram Post Metrics",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "job_type=collect_post_metrics platform=telegram",
+      "input": [
+        "publication_id",
+        "age_bucket"
+      ],
+      "steps": [
+        "Передать channel/message identifiers в MTProto service",
+        "Получить views/forwards/reactions и доступные stats",
+        "Сохранить raw payload",
+        "Upsert post snapshot"
+      ],
+      "output": [
+        "post snapshot id"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "WF-METRIC-007",
+      "name": "Collect MAX Available Metrics",
+      "group": "METRICS",
+      "priority": "MVP",
+      "trigger": "job_type=collect_metrics platform=max",
+      "input": [
+        "channel_id or publication_id",
+        "age_bucket"
+      ],
+      "steps": [
+        "Проверить capabilities коннектора",
+        "Получить доступные сведения о канале/сообщении",
+        "Не имитировать отсутствующие метрики",
+        "Сохранить raw payload",
+        "Заполнить доступные normalized fields",
+        "Пометить source limitations"
+      ],
+      "output": [
+        "snapshot id or unsupported marker"
+      ],
+      "notes": "Предусмотреть ручной CSV/import adapter как отдельный источник."
+    },
+    {
+      "id": "WF-METRIC-008",
+      "name": "Manual Metrics Import",
+      "group": "METRICS",
+      "priority": "PHASE_2",
+      "trigger": "File upload webhook",
+      "input": [
+        "channel_id",
+        "file",
+        "mapping"
+      ],
+      "steps": [
+        "Проверить формат",
+        "Предпросмотр mapping",
+        "Провести deduplication",
+        "Импортировать snapshots",
+        "Сохранить import audit"
+      ],
+      "output": [
+        "import summary"
+      ],
+      "notes": "Нужен для площадок с неполным API."
+    },
+    {
+      "id": "WF-AN-001",
+      "name": "Recalculate Analytical Features",
+      "group": "ANALYTICS",
+      "priority": "MVP",
+      "trigger": "After metric upsert + nightly schedule",
+      "input": [
+        "brand_id",
+        "affected period"
+      ],
+      "steps": [
+        "Обновить SQL/materialized views",
+        "Рассчитать ER/share/viral/growth",
+        "Рассчитать baselines",
+        "Рассчитать percentiles",
+        "Рассчитать provisional/final Content Score",
+        "Зафиксировать anomalies"
+      ],
+      "output": [
+        "analytics refresh status"
+      ],
+      "notes": "Математика выполняется SQL/Python, не LLM."
+    },
+    {
+      "id": "WF-AN-002",
+      "name": "Close Monthly Analytics Period",
+      "group": "ANALYTICS",
+      "priority": "MVP",
+      "trigger": "Schedule on first day of month",
+      "input": [
+        "previous month",
+        "active brands"
+      ],
+      "steps": [
+        "Проверить полноту snapshots",
+        "Создать missing-data warnings",
+        "Собрать channel/rubric/format/time aggregates",
+        "Заморозить period dataset",
+        "Создать report job"
+      ],
+      "output": [
+        "period dataset"
+      ],
+      "notes": "Дата закрытия может быть отложена на 1–2 дня настройкой."
+    },
+    {
+      "id": "WF-AN-003",
+      "name": "Generate Insights",
+      "group": "ANALYTICS",
+      "priority": "MVP",
+      "trigger": "job_type=generate_insights",
+      "input": [
+        "period dataset"
+      ],
+      "steps": [
+        "Сформировать evidence JSON",
+        "Определить sample size и confidence",
+        "Вызвать LLM со строгой схемой",
+        "Проверить, что все числовые утверждения имеют evidence",
+        "Создать insights"
+      ],
+      "output": [
+        "insight_ids"
+      ],
+      "notes": "LLM не получает права изменять исходные метрики."
+    },
+    {
+      "id": "WF-AN-004",
+      "name": "Generate Recommendations",
+      "group": "ANALYTICS",
+      "priority": "MVP",
+      "trigger": "job_type=generate_recommendations",
+      "input": [
+        "insight_ids",
+        "brand strategy"
+      ],
+      "steps": [
+        "Сопоставить insight с целями бренда",
+        "Сформировать action/reason/evidence/test metric",
+        "Рассчитать confidence",
+        "Создать recommendations",
+        "Уведомить SMM"
+      ],
+      "output": [
+        "recommendation_ids"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "WF-AN-005",
+      "name": "Generate Next Month Content Plan",
+      "group": "ANALYTICS",
+      "priority": "MVP",
+      "trigger": "job_type=generate_next_plan",
+      "input": [
+        "brand_id",
+        "recommendations",
+        "publication quota",
+        "calendar constraints"
+      ],
+      "steps": [
+        "Распределить 60/25/15 или брендовые доли",
+        "Сохранить обязательные рубрики",
+        "Добавить accepted recommendations",
+        "Создать темы и тестовые гипотезы",
+        "Проверить частоту и конфликт дат",
+        "Создать content_items в planned"
+      ],
+      "output": [
+        "draft content plan"
+      ],
+      "notes": "План остаётся черновиком до ручного утверждения."
+    },
+    {
+      "id": "WF-REPORT-001",
+      "name": "Generate Monthly Report",
+      "group": "REPORT",
+      "priority": "MVP",
+      "trigger": "job_type=generate_report",
+      "input": [
+        "brand_id",
+        "report_month"
+      ],
+      "steps": [
+        "Загрузить замороженные агрегаты",
+        "Построить chart data",
+        "Сформировать HTML",
+        "Создать PDF через render service",
+        "Загрузить PDF в Storage",
+        "Обновить monthly_reports",
+        "Отправить уведомление"
+      ],
+      "output": [
+        "report_asset_id"
+      ],
+      "notes": "В отчёте явно показываются ограничения и отсутствующие данные."
+    },
+    {
+      "id": "WF-OPS-001",
+      "name": "Integration Health Check",
+      "group": "OPS",
+      "priority": "MVP",
+      "trigger": "Schedule daily + manual",
+      "input": [
+        "active integration_connections"
+      ],
+      "steps": [
+        "Проверить secret reference",
+        "Выполнить безопасный read-only API call",
+        "Проверить scopes/capabilities",
+        "Обновить status/expires_at/last_error",
+        "Создать уведомление при проблеме"
+      ],
+      "output": [
+        "connection statuses"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "WF-OPS-002",
+      "name": "Notifications Delivery",
+      "group": "OPS",
+      "priority": "MVP",
+      "trigger": "job_type=send_notification",
+      "input": [
+        "notification_id",
+        "delivery channels"
+      ],
+      "steps": [
+        "Загрузить настройки пользователя",
+        "Отправить in-app/email/Telegram notification",
+        "Записать delivery status"
+      ],
+      "output": [
+        "delivery results"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "WF-OPS-003",
+      "name": "Retention and Cleanup",
+      "group": "OPS",
+      "priority": "MVP",
+      "trigger": "Schedule nightly",
+      "input": [],
+      "steps": [
+        "Удалить временные render files",
+        "Очистить устаревшие n8n execution payloads",
+        "Перевести исчерпанные jobs в failed/dead-letter",
+        "Проверить orphan assets",
+        "Сформировать cleanup audit"
+      ],
+      "output": [
+        "cleanup summary"
+      ],
+      "notes": "Не удаляет raw metrics и audit history по умолчанию."
+    },
+    {
+      "id": "WF-OPS-004",
+      "name": "Stuck Job Watchdog",
+      "group": "OPS",
+      "priority": "MVP",
+      "trigger": "Schedule every 5 minutes",
+      "input": [
+        "processing jobs/publications"
+      ],
+      "steps": [
+        "Найти locks старше допустимого SLA",
+        "Проверить n8n execution",
+        "Освободить безопасно восстанавливаемые jobs",
+        "Создать reconciliation для публикаций",
+        "Уведомить при повторяющихся зависаниях"
+      ],
+      "output": [
+        "recovered jobs"
+      ],
+      "notes": ""
+    }
+  ]
+}
