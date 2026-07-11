@@ -107,17 +107,39 @@ export default async function ChannelsPage({
             <div>
               <label className="label">Платформа</label>
               <select name="platform" className="input" required>
-                <option value="telegram">Telegram</option>
-                <option value="vk">ВКонтакте</option>
-                <option value="max">MAX</option>
-                <option value="youtube">YouTube</option>
-                <option value="rutube">RuTube</option>
-                <option value="instagram">Instagram</option>
-                <option value="threads">Threads</option>
-                <option value="tiktok">TikTok</option>
-                <option value="dzen">Дзен</option>
-                <option value="vcru">VC.ru</option>
-                <option value="ok">Одноклассники</option>
+                <optgroup label="Соцсети и мессенджеры">
+                  <option value="telegram">Telegram</option>
+                  <option value="vk">ВКонтакте</option>
+                  <option value="max">MAX</option>
+                  <option value="ok">Одноклассники</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="viber">Viber</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="threads">Threads</option>
+                  <option value="tenchat">TenChat</option>
+                </optgroup>
+                <optgroup label="Видео">
+                  <option value="youtube">YouTube</option>
+                  <option value="rutube">RuTube</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="yappy">Yappy</option>
+                </optgroup>
+                <optgroup label="Статьи и комьюнити">
+                  <option value="dzen">Дзен</option>
+                  <option value="vcru">VC.ru</option>
+                  <option value="pikabu">Пикабу</option>
+                  <option value="habr">Habr</option>
+                  <option value="boosty">Boosty</option>
+                </optgroup>
+                <optgroup label="Зарубежные">
+                  <option value="pinterest">Pinterest</option>
+                  <option value="twitter">X (Twitter)</option>
+                  <option value="linkedin">LinkedIn</option>
+                </optgroup>
+                <optgroup label="Прочее">
+                  <option value="website">Сайт</option>
+                  <option value="other">Другое</option>
+                </optgroup>
               </select>
             </div>
             <div>

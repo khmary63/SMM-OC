@@ -21,6 +21,16 @@ export type ChannelPlatform =
   | "dzen"
   | "vcru"
   | "ok"
+  | "whatsapp"
+  | "viber"
+  | "tenchat"
+  | "yappy"
+  | "pikabu"
+  | "habr"
+  | "boosty"
+  | "pinterest"
+  | "twitter"
+  | "linkedin"
   | "website"
   | "other";
 
@@ -301,6 +311,16 @@ export const PLATFORM_LABELS: Record<ChannelPlatform, string> = {
   dzen: "Дзен",
   vcru: "VC.ru",
   ok: "Одноклассники",
+  whatsapp: "WhatsApp",
+  viber: "Viber",
+  tenchat: "TenChat",
+  yappy: "Yappy",
+  pikabu: "Пикабу",
+  habr: "Habr",
+  boosty: "Boosty",
+  pinterest: "Pinterest",
+  twitter: "X (Twitter)",
+  linkedin: "LinkedIn",
   website: "Сайт",
   other: "Другое",
 };
