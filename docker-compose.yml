@@ -32,6 +32,8 @@ services:
     environment:
       - N8N_HOST=${N8N_HOST:-localhost}
       - WEBHOOK_URL=${N8N_PUBLIC_BASE_URL:-http://localhost:5678}
+      # Доступ по HTTP без домена; при переходе на HTTPS-домен убрать
+      - N8N_SECURE_COOKIE=false
       - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
       - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
       - WORKER_NAME=n8n-main
