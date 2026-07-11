@@ -1,5 +1,6 @@
 import { ApiError, apiHandler } from "@/lib/api";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { slugify } from "@/lib/workspace";
 
 export const POST = apiHandler<{ name?: string; timezone?: string }>(
@@ -13,7 +14,8 @@ export const POST = apiHandler<{ name?: string; timezone?: string }>(
     const name = body.name?.trim();
     if (!name) throw new ApiError("name обязателен");
 
-    const { data, error } = await supabase
+    const admin = createAdminClient();
+    const { data, error } = await admin
       .from("workspaces")
       .insert({
         name,

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { slugify } from "@/lib/workspace";
 
 async function createWorkspace(formData: FormData) {
@@ -16,7 +17,11 @@ async function createWorkspace(formData: FormData) {
 
   const slug = `${slugify(name)}-${Math.random().toString(36).slice(2, 6)}`;
 
-  const { data, error } = await supabase
+  // Первичная загрузка workspace выполняется service-role клиентом:
+  // личность пользователя уже проверена через getUser() выше, а RLS-insert
+  // на этапе bootstrap чувствителен к тому, доходит ли JWT сессии до PostgREST.
+  const admin = createAdminClient();
+  const { data, error } = await admin
     .from("workspaces")
     .insert({ name, slug, owner_user_id: user.id, timezone })
     .select("slug")
