@@ -87,7 +87,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "update public.publications\n   set status = 'published',\n       external_post_id = $2,\n       external_url = $3,\n       published_at = now(),\n       last_attempt_at = now(),\n       attempt_count = attempt_count + 1,\n       locked_at = null, locked_by = null,\n       updated_at = now()\n where id = $1::uuid\n returning id;",
+        "query": "update public.publications\n   set status = 'published',\n       external_post_id = $2,\n       external_url = $3,\n       published_at = now(),\n       last_attempt_at = now(),\n       attempt_count = attempt_count + 1,\n       locked_at = null, locked_by = null,\n       updated_at = now()\n where id = $1::uuid\n returning id, workspace_id;",
         "options": {
           "queryReplacement": "={{ [$('Idempotency Guard + Build Message').item.json.id, String($json.result.message_id), ($('Idempotency Guard + Build Message').item.json.username ? 'https://t.me/' + $('Idempotency Guard + Build Message').item.json.username + '/' + $json.result.message_id : null)] }}"
         }
@@ -123,6 +123,24 @@
           "name": "Supabase Postgres (service)"
         }
       }
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_CORE_004_ID",
+        "workflowInputs": {
+          "value": {
+            "workspace_id": "={{ $('Save External ID + published').item.json.workspace_id }}",
+            "event_type": "publication.published",
+            "data": "={{ { publication_id: $('Save External ID + published').item.json.id, platform: 'telegram' } }}"
+          }
+        },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "id": "emit",
+      "name": "Emit Webhook Event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1540, 0]
     }
   ],
   "connections": {
@@ -143,6 +161,9 @@
     },
     "Save External ID + published": {
       "main": [[{ "node": "Create Snapshot Jobs", "type": "main", "index": 0 }]]
+    },
+    "Create Snapshot Jobs": {
+      "main": [[{ "node": "Emit Webhook Event", "type": "main", "index": 0 }]]
     }
   },
   "settings": {

@@ -1,0 +1,162 @@
+{
+  "name": "WF-PUB-004 — Publish to MAX",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [{ "name": "publication_id", "type": "string" }]
+        }
+      },
+      "id": "trigger",
+      "name": "Sub-workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select p.id, p.workspace_id, p.external_post_id,\n       cv.body, cv.hashtags,\n       ch.external_channel_id,\n       ic.secret_ref\n  from public.publications p\n  join public.content_variants cv on cv.id = p.content_variant_id\n  join public.channels ch on ch.id = p.channel_id\n  left join public.integration_connections ic on ic.channel_id = ch.id\n where p.id = $1::uuid\n   and p.status in ('queued','processing')\n for update of p skip locked;",
+        "options": { "queryReplacement": "={{ [$json.publication_id] }}" }
+      },
+      "id": "load",
+      "name": "Load + Lock Publication",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [220, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nif (!row || !row.id) throw new Error('Publication not found or already processed');\nif (row.external_post_id) return [{ json: { ...row, skip: true } }];\nif (!row.secret_ref) throw new Error('No integration connection / secret_ref for channel');\nif (!row.external_channel_id) throw new Error('external_channel_id (chat_id) is required for MAX');\n\nconst text = [row.body, (row.hashtags ?? []).map(h => `#${h}`).join(' ')]\n  .filter(Boolean).join('\\n\\n');\nif (!text) throw new Error('Empty message');\n\nreturn [{ json: { ...row, text, skip: false } }];"
+      },
+      "id": "guard",
+      "name": "Idempotency Guard + Build Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select public.resolve_integration_secret($1::uuid) as access_token;",
+        "options": { "queryReplacement": "={{ [$json.secret_ref] }}" }
+      },
+      "id": "secret",
+      "name": "Resolve MAX Token (server-side)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [660, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.MAX_API_BASE_URL ?? 'https://botapi.max.ru') + '/messages' }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "access_token", "value": "={{ $json.access_token }}" },
+            { "name": "chat_id", "value": "={{ $('Idempotency Guard + Build Message').item.json.external_channel_id }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $('Idempotency Guard + Build Message').item.json.text }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "send",
+      "name": "MAX POST /messages",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst mid = res.message?.body?.mid ?? res.message?.mid ?? res.mid;\nif (!mid) throw new Error('MAX: mid отсутствует в ответе: ' + JSON.stringify(res).slice(0, 300));\nreturn [{ json: { mid: String(mid) } }];"
+      },
+      "id": "check",
+      "name": "Check MAX Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update public.publications\n   set status='published', external_post_id=$2,\n       published_at=now(), last_attempt_at=now(), attempt_count=attempt_count+1,\n       locked_at=null, locked_by=null, updated_at=now()\n where id=$1::uuid\n returning id, workspace_id;",
+        "options": {
+          "queryReplacement": "={{ [$('Idempotency Guard + Build Message').item.json.id, $json.mid] }}"
+        }
+      },
+      "id": "save",
+      "name": "Save External ID + published",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1320, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into public.automation_jobs (workspace_id, job_type, entity_type, entity_id, idempotency_key, run_after, payload)\nselect p.workspace_id, 'collect_post_metrics', 'publication', p.id,\n       'snapshot:' || p.id || ':' || bucket.b,\n       p.published_at + bucket.iv,\n       jsonb_build_object('age_bucket', bucket.b, 'platform', 'max')\n  from public.publications p,\n       (values ('1h', interval '1 hour'), ('24h', interval '24 hours'), ('7d', interval '7 days')) as bucket(b, iv)\n where p.id = $1::uuid\non conflict (idempotency_key) do nothing;",
+        "options": { "queryReplacement": "={{ [$json.id] }}" }
+      },
+      "id": "snapshots",
+      "name": "Create Snapshot Jobs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1540, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_CORE_004_ID",
+        "workflowInputs": {
+          "value": {
+            "workspace_id": "={{ $('Save External ID + published').item.json.workspace_id }}",
+            "event_type": "publication.published",
+            "data": "={{ { publication_id: $('Save External ID + published').item.json.id, platform: 'max' } }}"
+          }
+        },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "id": "emit",
+      "name": "Emit Webhook Event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1760, 0]
+    }
+  ],
+  "connections": {
+    "Sub-workflow Trigger": { "main": [[{ "node": "Load + Lock Publication", "type": "main", "index": 0 }]] },
+    "Load + Lock Publication": { "main": [[{ "node": "Idempotency Guard + Build Message", "type": "main", "index": 0 }]] },
+    "Idempotency Guard + Build Message": { "main": [[{ "node": "Resolve MAX Token (server-side)", "type": "main", "index": 0 }]] },
+    "Resolve MAX Token (server-side)": { "main": [[{ "node": "MAX POST /messages", "type": "main", "index": 0 }]] },
+    "MAX POST /messages": { "main": [[{ "node": "Check MAX Response", "type": "main", "index": 0 }]] },
+    "Check MAX Response": { "main": [[{ "node": "Save External ID + published", "type": "main", "index": 0 }]] },
+    "Save External ID + published": { "main": [[{ "node": "Create Snapshot Jobs", "type": "main", "index": 0 }]] },
+    "Create Snapshot Jobs": { "main": [[{ "node": "Emit Webhook Event", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "errorWorkflow": "WF-CORE-001" }
+}

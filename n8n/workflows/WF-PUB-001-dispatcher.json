@@ -1,0 +1,239 @@
+{
+  "name": "WF-PUB-001 — Publication Dispatcher",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "entity_id", "type": "string" },
+            { "name": "payload", "type": "object" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Sub-workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select p.id as publication_id, p.status, ch.platform\n  from public.publications p\n  join public.channels ch on ch.id = p.channel_id\n where p.id = $1::uuid\n   and p.status in ('queued','failed')\n   and p.scheduled_at <= now();",
+        "options": { "queryReplacement": "={{ [$json.entity_id] }}" }
+      },
+      "id": "load",
+      "name": "Load Due Publication",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [220, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update public.publications set status='processing', locked_at=now(), locked_by=$2, updated_at=now()\n where id=$1::uuid and status in ('queued','failed')\n returning id as publication_id, (select platform from public.channels where id=channel_id) as platform;",
+        "options": {
+          "queryReplacement": "={{ [$json.publication_id, $env.WORKER_NAME ?? 'n8n-main'] }}"
+        }
+      },
+      "id": "lock",
+      "name": "Lock -> processing",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [440, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "version": 2, "typeValidation": "strict", "caseSensitive": true },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.platform }}",
+                    "rightValue": "telegram",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "telegram"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "typeValidation": "strict", "caseSensitive": true },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.platform }}",
+                    "rightValue": "vk",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "vk"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "typeValidation": "strict", "caseSensitive": true },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.platform }}",
+                    "rightValue": "max",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "max"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "typeValidation": "strict", "caseSensitive": true },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.platform }}",
+                    "rightValue": "vcru",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "vcru"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "typeValidation": "strict", "caseSensitive": true },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.platform }}",
+                    "rightValue": "youtube",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "youtube"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "route",
+      "name": "Route by Platform",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_PUB_003_ID",
+        "workflowInputs": {
+          "value": { "publication_id": "={{ $json.publication_id }}" }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "pub-tg",
+      "name": "Publish Telegram",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [900, -280]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_PUB_002_ID",
+        "workflowInputs": {
+          "value": { "publication_id": "={{ $json.publication_id }}" }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "pub-vk",
+      "name": "Publish VK",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [900, -140]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_PUB_004_ID",
+        "workflowInputs": {
+          "value": { "publication_id": "={{ $json.publication_id }}" }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "pub-max",
+      "name": "Publish MAX",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [900, 0]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_PUB_006_ID",
+        "workflowInputs": {
+          "value": { "publication_id": "={{ $json.publication_id }}" }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "pub-vcru",
+      "name": "Publish VC.ru",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [900, 140]
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_PUB_007_ID",
+        "workflowInputs": {
+          "value": { "publication_id": "={{ $json.publication_id }}" }
+        },
+        "options": { "waitForSubWorkflow": true }
+      },
+      "id": "pub-youtube",
+      "name": "Publish YouTube",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [900, 280]
+    }
+  ],
+  "connections": {
+    "Sub-workflow Trigger": {
+      "main": [[{ "node": "Load Due Publication", "type": "main", "index": 0 }]]
+    },
+    "Load Due Publication": {
+      "main": [[{ "node": "Lock -> processing", "type": "main", "index": 0 }]]
+    },
+    "Lock -> processing": {
+      "main": [[{ "node": "Route by Platform", "type": "main", "index": 0 }]]
+    },
+    "Route by Platform": {
+      "main": [
+        [{ "node": "Publish Telegram", "type": "main", "index": 0 }],
+        [{ "node": "Publish VK", "type": "main", "index": 0 }],
+        [{ "node": "Publish MAX", "type": "main", "index": 0 }],
+        [{ "node": "Publish VC.ru", "type": "main", "index": 0 }],
+        [{ "node": "Publish YouTube", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "errorWorkflow": "WF-CORE-001" }
+}

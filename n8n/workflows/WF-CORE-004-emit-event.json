@@ -1,0 +1,58 @@
+{
+  "name": "WF-CORE-004 — Emit Webhook Event",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            { "name": "workspace_id", "type": "string" },
+            { "name": "event_type", "type": "string" },
+            { "name": "data", "type": "object" }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Sub-workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Подписываем тело HMAC-SHA256 общим секретом N8N_WEBHOOK_TOKEN\nconst crypto = require('crypto');\nconst input = $input.first().json;\nconst body = JSON.stringify({\n  workspace_id: input.workspace_id,\n  event_type: input.event_type,\n  data: input.data ?? {},\n});\nconst token = $env.N8N_WEBHOOK_TOKEN;\nif (!token) throw new Error('N8N_WEBHOOK_TOKEN is not configured');\nconst signature = crypto.createHmac('sha256', token).update(body).digest('hex');\nconst baseUrl = $env.APP_INTERNAL_URL ?? $env.APP_BASE_URL ?? 'http://web:3000';\nreturn [{ json: { body, signature, url: baseUrl + '/api/internal/events' } }];"
+      },
+      "id": "sign",
+      "name": "Sign Payload (HMAC)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "content-type", "value": "application/json" },
+            { "name": "x-smm-signature", "value": "={{ $json.signature }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "string",
+        "body": "={{ $json.body }}",
+        "options": { "timeout": 10000 }
+      },
+      "id": "post",
+      "name": "POST /api/internal/events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0]
+    }
+  ],
+  "connections": {
+    "Sub-workflow Trigger": { "main": [[{ "node": "Sign Payload (HMAC)", "type": "main", "index": 0 }]] },
+    "Sign Payload (HMAC)": { "main": [[{ "node": "POST /api/internal/events", "type": "main", "index": 0 }]] }
+  },
+  "settings": {}
+}

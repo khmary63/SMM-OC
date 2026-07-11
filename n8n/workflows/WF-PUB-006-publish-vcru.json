@@ -1,0 +1,148 @@
+{
+  "name": "WF-PUB-006 — Publish to VC.ru",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [{ "name": "publication_id", "type": "string" }]
+        }
+      },
+      "id": "trigger",
+      "name": "Sub-workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select p.id, p.workspace_id, p.external_post_id,\n       cv.body, cv.title,\n       ci.title as item_title,\n       ch.external_channel_id,\n       ic.secret_ref\n  from public.publications p\n  join public.content_variants cv on cv.id = p.content_variant_id\n  join public.content_items ci on ci.id = cv.content_item_id\n  join public.channels ch on ch.id = p.channel_id\n  left join public.integration_connections ic on ic.channel_id = ch.id\n where p.id = $1::uuid\n   and p.status in ('queued','processing')\n for update of p skip locked;",
+        "options": { "queryReplacement": "={{ [$json.publication_id] }}" }
+      },
+      "id": "load",
+      "name": "Load + Lock Publication",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [220, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\nif (!row || !row.id) throw new Error('Publication not found or already processed');\nif (row.external_post_id) return [{ json: { ...row, skip: true } }];\nif (!row.secret_ref) throw new Error('No integration connection / secret_ref (X-Device-Token) for channel');\n\nconst title = row.title || row.item_title || 'Без названия';\nconst text = row.body;\nif (!text) throw new Error('Empty article body');\n\nreturn [{ json: { ...row, article_title: title, article_text: text, skip: false } }];"
+      },
+      "id": "guard",
+      "name": "Idempotency Guard + Build Article",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select public.resolve_integration_secret($1::uuid) as device_token;",
+        "options": { "queryReplacement": "={{ [$json.secret_ref] }}" }
+      },
+      "id": "secret",
+      "name": "Resolve X-Device-Token (server-side)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [660, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.VCRU_API_BASE ?? 'https://api.vc.ru/v1.9') + '/entry/create' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-Device-Token", "value": "={{ $json.device_token }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "title", "value": "={{ $('Idempotency Guard + Build Article').item.json.article_title }}" },
+            { "name": "text", "value": "={{ $('Idempotency Guard + Build Article').item.json.article_text }}" },
+            { "name": "subsite_id", "value": "={{ $('Idempotency Guard + Build Article').item.json.external_channel_id ?? '' }}" }
+          ]
+        },
+        "options": { "timeout": 30000 }
+      },
+      "id": "send",
+      "name": "VC.ru entry/create",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Osnova API: успех в result, ошибки в message/error\nconst res = $input.first().json;\nconst entry = res.result ?? res.data ?? res;\nconst id = entry.id ?? entry.entry?.id;\nif (!id) throw new Error('VC.ru: id статьи отсутствует в ответе: ' + JSON.stringify(res).slice(0, 300));\nconst url = entry.url ?? entry.entry?.url ?? `https://vc.ru/${id}`;\nreturn [{ json: { entry_id: String(id), entry_url: url } }];"
+      },
+      "id": "check",
+      "name": "Check VC.ru Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update public.publications\n   set status='published', external_post_id=$2, external_url=$3,\n       published_at=now(), last_attempt_at=now(), attempt_count=attempt_count+1,\n       locked_at=null, locked_by=null, updated_at=now()\n where id=$1::uuid\n returning id, workspace_id;",
+        "options": {
+          "queryReplacement": "={{ [$('Idempotency Guard + Build Article').item.json.id, $json.entry_id, $json.entry_url] }}"
+        }
+      },
+      "id": "save",
+      "name": "Save External ID + published",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1320, 0],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_SUPABASE_PG_CREDENTIAL",
+          "name": "Supabase Postgres (service)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "REPLACE_WITH_WF_CORE_004_ID",
+        "workflowInputs": {
+          "value": {
+            "workspace_id": "={{ $json.workspace_id }}",
+            "event_type": "publication.published",
+            "data": "={{ { publication_id: $json.id, platform: 'vcru' } }}"
+          }
+        },
+        "options": { "waitForSubWorkflow": false }
+      },
+      "id": "emit",
+      "name": "Emit Webhook Event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [1540, 0]
+    }
+  ],
+  "connections": {
+    "Sub-workflow Trigger": { "main": [[{ "node": "Load + Lock Publication", "type": "main", "index": 0 }]] },
+    "Load + Lock Publication": { "main": [[{ "node": "Idempotency Guard + Build Article", "type": "main", "index": 0 }]] },
+    "Idempotency Guard + Build Article": { "main": [[{ "node": "Resolve X-Device-Token (server-side)", "type": "main", "index": 0 }]] },
+    "Resolve X-Device-Token (server-side)": { "main": [[{ "node": "VC.ru entry/create", "type": "main", "index": 0 }]] },
+    "VC.ru entry/create": { "main": [[{ "node": "Check VC.ru Response", "type": "main", "index": 0 }]] },
+    "Check VC.ru Response": { "main": [[{ "node": "Save External ID + published", "type": "main", "index": 0 }]] },
+    "Save External ID + published": { "main": [[{ "node": "Emit Webhook Event", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "errorWorkflow": "WF-CORE-001" }
+}

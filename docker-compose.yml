@@ -37,6 +37,9 @@ services:
       - WORKER_NAME=n8n-main
       # workflow-переменные (см. n8n/README.md)
       - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - APP_INTERNAL_URL=http://web:3000
+      - VCRU_API_BASE=${VCRU_API_BASE:-https://api.vc.ru/v1.9}
       - TELEGRAM_STATS_URL=http://telegram-collector:8081
       - TELEGRAM_STATS_TOKEN=${TELEGRAM_STATS_TOKEN}
       - VIDEO_RENDER_URL=http://video-worker:8082
