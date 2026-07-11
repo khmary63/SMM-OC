@@ -113,6 +113,11 @@ export default async function ChannelsPage({
                 <option value="youtube">YouTube</option>
                 <option value="rutube">RuTube</option>
                 <option value="instagram">Instagram</option>
+                <option value="threads">Threads</option>
+                <option value="tiktok">TikTok</option>
+                <option value="dzen">Дзен</option>
+                <option value="vcru">VC.ru</option>
+                <option value="ok">Одноклассники</option>
               </select>
             </div>
             <div>
