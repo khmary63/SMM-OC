@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { requireWorkspace, canEditContent, canApprove } from "@/lib/workspace";
 import { generateContentCopy } from "@/lib/ai";
+import { emitWorkspaceEvent } from "@/lib/webhooks";
 import { PLATFORM_LABELS } from "@/lib/types";
 import type { ChannelPlatform } from "@/lib/types";
 
@@ -346,6 +347,17 @@ export async function decideApproval(ws: string, formData: FormData) {
       .update({ status: "revision_requested" })
       .eq("id", variant.content_item_id);
   }
+
+  await emitWorkspaceEvent(
+    ctx.workspace.id,
+    decision === "approved" ? "content.approved" : "content.revision_requested",
+    {
+      content_item_id: variant.content_item_id,
+      content_variant_id: variant.id,
+      version_no: variant.version_no,
+      comment,
+    }
+  );
 
   revalidatePath(`/w/${ws}/approvals`);
   revalidatePath(`/w/${ws}/content/${variant.content_item_id}`);

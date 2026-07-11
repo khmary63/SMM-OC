@@ -2,6 +2,7 @@ import "server-only";
 
 import { createClient } from "@/lib/supabase/server";
 import { enqueueJob, publicationIdempotencyKey } from "@/lib/jobs";
+import { emitWorkspaceEvent } from "@/lib/webhooks";
 
 /**
  * Постановка публикации в очередь.
@@ -104,6 +105,12 @@ export async function schedulePublication(params: {
     payload: { platform: channel.platform },
   });
 
+  await emitWorkspaceEvent(params.workspaceId, "publication.queued", {
+    publication_id: publication.id,
+    channel_id: params.channelId,
+    scheduled_at: scheduledAt.toISOString(),
+  });
+
   return publication;
 }
 
@@ -137,4 +144,8 @@ export async function cancelPublication(params: {
     .update({ status: "approved" })
     .eq("id", publication.content_variant_id)
     .eq("status", "scheduled");
+
+  await emitWorkspaceEvent(params.workspaceId, "publication.cancelled", {
+    publication_id: publication.id,
+  });
 }

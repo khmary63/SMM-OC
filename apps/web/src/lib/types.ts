@@ -14,6 +14,8 @@ export type ChannelPlatform =
   | "telegram"
   | "max"
   | "youtube"
+  | "rutube"
+  | "instagram"
   | "dzen"
   | "ok"
   | "website"
@@ -289,6 +291,8 @@ export const PLATFORM_LABELS: Record<ChannelPlatform, string> = {
   telegram: "Telegram",
   max: "MAX",
   youtube: "YouTube",
+  rutube: "RuTube",
+  instagram: "Instagram",
   dzen: "Дзен",
   ok: "Одноклассники",
   website: "Сайт",

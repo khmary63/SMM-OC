@@ -9,6 +9,10 @@ import {
   updateMemberRole,
   removeMember,
 } from "./actions";
+import { revokeApiKeyAction, deleteWebhookAction } from "./integration-actions";
+import { CreateApiKeyForm, CreateWebhookForm } from "./integrations";
+import { WEBHOOK_EVENTS } from "@/lib/webhooks";
+import { formatDateTime } from "@/lib/format";
 
 const ASSIGNABLE_ROLES: WorkspaceRole[] = [
   "admin",
@@ -27,18 +31,39 @@ export default async function SettingsPage({
   const ctx = await requireWorkspace(ws);
   const supabase = await createClient();
 
-  const { data: members } = await supabase
-    .from("workspace_members")
-    .select("user_id, role, is_active, joined_at, profiles:user_id(display_name)")
-    .eq("workspace_id", ctx.workspace.id)
-    .eq("is_active", true)
-    .order("joined_at");
-
   const admin = canAdmin(ctx.role);
+
+  const [{ data: members }, { data: apiKeys }, { data: webhooks }] =
+    await Promise.all([
+      supabase
+        .from("workspace_members")
+        .select(
+          "user_id, role, is_active, joined_at, profiles:user_id(display_name)"
+        )
+        .eq("workspace_id", ctx.workspace.id)
+        .eq("is_active", true)
+        .order("joined_at"),
+      admin
+        ? supabase
+            .from("api_keys")
+            .select("id, name, key_prefix, last_used_at, revoked_at, created_at")
+            .eq("workspace_id", ctx.workspace.id)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: null }),
+      admin
+        ? supabase
+            .from("webhook_endpoints")
+            .select("id, url, events, is_active, description, created_at")
+            .eq("workspace_id", ctx.workspace.id)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: null }),
+    ]);
   const updateWsAction = updateWorkspace.bind(null, ws);
   const inviteAction = inviteMember.bind(null, ws);
   const roleAction = updateMemberRole.bind(null, ws);
   const removeAction = removeMember.bind(null, ws);
+  const revokeKeyAction = revokeApiKeyAction.bind(null, ws);
+  const deleteHookAction = deleteWebhookAction.bind(null, ws);
 
   return (
     <div>
@@ -157,6 +182,95 @@ export default async function SettingsPage({
           </form>
         )}
       </div>
+
+      {admin && (
+        <>
+          <div className="card mt-6">
+            <p className="font-medium">API-ключи</p>
+            <p className="mt-1 mb-4 text-sm text-zinc-500">
+              Доступ к платформе извне: любой сервис сможет создавать контент и
+              публикации через REST API. Документация — в файле{" "}
+              <code className="rounded bg-zinc-100 px-1">docs/api.md</code>{" "}
+              репозитория.
+            </p>
+            <div className="space-y-2">
+              {apiKeys?.map((k) => (
+                <div
+                  key={k.id}
+                  className="flex flex-wrap items-center gap-3 border-b border-zinc-100 pb-2 last:border-0"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">
+                      {k.name}
+                      {k.revoked_at && (
+                        <span className="badge ml-2 bg-red-50 text-red-600">
+                          Отозван
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-zinc-400">
+                      {k.key_prefix}… · создан {formatDateTime(k.created_at)}
+                      {k.last_used_at &&
+                        ` · использован ${formatDateTime(k.last_used_at)}`}
+                    </p>
+                  </div>
+                  {!k.revoked_at && (
+                    <form action={revokeKeyAction}>
+                      <input type="hidden" name="key_id" value={k.id} />
+                      <button className="btn-danger">Отозвать</button>
+                    </form>
+                  )}
+                </div>
+              ))}
+              {(!apiKeys || apiKeys.length === 0) && (
+                <p className="text-sm text-zinc-400">Ключей пока нет.</p>
+              )}
+            </div>
+            <div className="mt-4 border-t border-zinc-100 pt-4">
+              <CreateApiKeyForm ws={ws} />
+            </div>
+          </div>
+
+          <div className="card mt-6">
+            <p className="font-medium">Вебхуки</p>
+            <p className="mt-1 mb-4 text-sm text-zinc-500">
+              Платформа будет отправлять POST-запросы на ваш URL при событиях
+              (публикация вышла, контент согласован…). Каждый запрос подписан:
+              заголовок{" "}
+              <code className="rounded bg-zinc-100 px-1">X-Maria-Signature</code>{" "}
+              = HMAC-SHA256 от тела запроса с вашим секретом.
+            </p>
+            <div className="space-y-2">
+              {webhooks?.map((h) => (
+                <div
+                  key={h.id}
+                  className="flex flex-wrap items-center gap-3 border-b border-zinc-100 pb-2 last:border-0"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{h.url}</p>
+                    <p className="text-xs text-zinc-400">
+                      {h.events.length > 0
+                        ? h.events.join(", ")
+                        : "все события"}
+                      {h.description && ` · ${h.description}`}
+                    </p>
+                  </div>
+                  <form action={deleteHookAction}>
+                    <input type="hidden" name="endpoint_id" value={h.id} />
+                    <button className="btn-danger">Удалить</button>
+                  </form>
+                </div>
+              ))}
+              {(!webhooks || webhooks.length === 0) && (
+                <p className="text-sm text-zinc-400">Вебхуков пока нет.</p>
+              )}
+            </div>
+            <div className="mt-4 border-t border-zinc-100 pt-4">
+              <CreateWebhookForm ws={ws} events={WEBHOOK_EVENTS} />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
