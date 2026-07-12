@@ -2,13 +2,89 @@ import "server-only";
 
 import Anthropic from "@anthropic-ai/sdk";
 
+/**
+ * AI-провайдер выбирается переменной AI_PROVIDER:
+ *  - "anthropic"  — прямой Claude API (недоступен из РФ по геоблокировке);
+ *  - "openai"     — любой OpenAI-совместимый endpoint (OpenRouter, российские
+ *                   шлюзы, self-hosted прокси). Задаётся AI_BASE_URL + AI_API_KEY.
+ */
+const PROVIDER = (process.env.AI_PROVIDER || "anthropic").toLowerCase();
 const MODEL = process.env.AI_MODEL || "claude-sonnet-5";
 
-function getClient(): Anthropic {
+/**
+ * Единая точка вызова LLM. Принимает system+user, возвращает текст ответа.
+ * Обе ветки просят модель отвечать чистым JSON — парсинг общий (ниже).
+ */
+async function chat(system: string, user: string, maxTokens: number): Promise<string> {
+  if (PROVIDER === "openai") {
+    return chatOpenAICompatible(system, user, maxTokens);
+  }
+  return chatAnthropic(system, user, maxTokens);
+}
+
+async function chatAnthropic(
+  system: string,
+  user: string,
+  maxTokens: number
+): Promise<string> {
   if (!process.env.ANTHROPIC_API_KEY) {
     throw new Error("ANTHROPIC_API_KEY не настроен");
   }
-  return new Anthropic();
+  const client = new Anthropic();
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: maxTokens,
+    system,
+    messages: [{ role: "user", content: user }],
+  });
+  return response.content
+    .filter((b) => b.type === "text")
+    .map((b) => (b as { text: string }).text)
+    .join("");
+}
+
+async function chatOpenAICompatible(
+  system: string,
+  user: string,
+  maxTokens: number
+): Promise<string> {
+  const baseUrl = (process.env.AI_BASE_URL || "https://openrouter.ai/api/v1").replace(
+    /\/+$/,
+    ""
+  );
+  const apiKey = process.env.AI_API_KEY;
+  if (!apiKey) {
+    throw new Error("AI_API_KEY не настроен (нужен для AI_PROVIDER=openai)");
+  }
+
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: maxTokens,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+    signal: AbortSignal.timeout(120000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`AI provider ${res.status}: ${text.slice(0, 300)}`);
+  }
+
+  const json = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) throw new Error("AI provider вернул пустой ответ");
+  return content;
 }
 
 export interface BrandContext {
@@ -42,8 +118,6 @@ export async function generateContentCopy(params: {
   baseText?: string | null;
   platforms: string[];
 }): Promise<GeneratedVariant[]> {
-  const client = getClient();
-
   const system = [
     "Ты — SMM-копирайтер платформы MARIA SMM OS.",
     "Пиши на русском языке, если бренд не требует иного.",
@@ -72,18 +146,7 @@ export async function generateContentCopy(params: {
     .filter(Boolean)
     .join("\n\n");
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 4000,
-    system,
-    messages: [{ role: "user", content: user }],
-  });
-
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => (b as { text: string }).text)
-    .join("");
-
+  const text = await chat(system, user, 4000);
   const variants = parseJsonArray<GeneratedVariant>(text);
 
   // Контроль запрещённых фраз (шаг 6 WF-CONTENT-001)
@@ -118,8 +181,6 @@ export async function generateNextMonthPlan(params: {
   performanceSummary: Record<string, unknown>;
   acceptedRecommendations: { action: string; reason: string }[];
 }): Promise<{ summary: string; topics: PlanTopic[] }> {
-  const client = getClient();
-
   const system = [
     "Ты — контент-стратег платформы MARIA SMM OS.",
     "Планируй по правилу распределения 60% проверенный контент / 25% развитие / 15% эксперименты.",
@@ -136,18 +197,7 @@ export async function generateNextMonthPlan(params: {
       : "Принятых рекомендаций нет.",
   ].join("\n\n");
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    system,
-    messages: [{ role: "user", content: user }],
-  });
-
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => (b as { text: string }).text)
-    .join("");
-
+  const text = await chat(system, user, 8000);
   return parseJsonObject(text);
 }
 
@@ -170,8 +220,6 @@ export interface InsightResult {
 export async function generateInsights(
   evidenceJson: Record<string, unknown>
 ): Promise<InsightResult> {
-  const client = getClient();
-
   const system = [
     "Ты — аналитик платформы MARIA SMM OS.",
     "Тебе передают уже рассчитанные агрегаты. Не выдумывай числа: каждое числовое утверждение должно опираться на переданный evidence.",
@@ -179,18 +227,7 @@ export async function generateInsights(
     'Отвечай СТРОГО валидным JSON: {"summary":"", "recommendations":[{"action","reason","evidence":[],"confidence":"high|medium|low|insufficient","test_metric","test_period_days":30}]}. Без markdown.',
   ].join("\n");
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 6000,
-    system,
-    messages: [{ role: "user", content: JSON.stringify(evidenceJson) }],
-  });
-
-  const text = response.content
-    .filter((b) => b.type === "text")
-    .map((b) => (b as { text: string }).text)
-    .join("");
-
+  const text = await chat(system, JSON.stringify(evidenceJson), 6000);
   return parseJsonObject(text);
 }
 
