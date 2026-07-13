@@ -52,9 +52,17 @@ async function chatOpenAICompatible(
     /\/+$/,
     ""
   );
-  const apiKey = process.env.AI_API_KEY;
+  const apiKey = (process.env.AI_API_KEY || "").trim();
   if (!apiKey) {
     throw new Error("AI_API_KEY не настроен (нужен для AI_PROVIDER=openai)");
+  }
+  // Защита от гомоглифов: кириллический символ в ключе роняет заголовок fetch.
+  const badChar = [...apiKey].find((c) => c.charCodeAt(0) > 127);
+  if (badChar) {
+    throw new Error(
+      `AI_API_KEY содержит недопустимый (не-латинский) символ «${badChar}» — ` +
+        "скорее всего кириллица при вводе. Скопируйте ключ заново."
+    );
   }
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
