@@ -37,6 +37,8 @@ services:
       - WEBHOOK_URL=${N8N_PUBLIC_BASE_URL:-http://localhost:5678}
       # Доступ по HTTP без домена; при переходе на HTTPS-домен убрать
       - N8N_SECURE_COOKIE=false
+      # Разрешить $env.* в выражениях workflow (WORKER_NAME, MAX_API_BASE_URL и др.)
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
       - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
       - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
       - WORKER_NAME=n8n-main
