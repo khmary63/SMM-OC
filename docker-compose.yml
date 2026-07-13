@@ -39,6 +39,9 @@ services:
       - N8N_SECURE_COOKIE=false
       # Разрешить $env.* в выражениях workflow (WORKER_NAME, MAX_API_BASE_URL и др.)
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # Предпочитать IPv4: у контейнера нет IPv6-egress, а api.telegram.org и
+      # некоторые API резолвятся в IPv6 → иначе "fetch failed".
+      - NODE_OPTIONS=--dns-result-order=ipv4first
       - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
       - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
       - WORKER_NAME=n8n-main
