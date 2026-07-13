@@ -30,29 +30,32 @@ services:
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    ports:
-      - "5678:5678"
+    # Сеть хоста: с этого сервера Telegram доступен только по IPv6, а у
+    # bridge-контейнера IPv6 нет. Host networking даёт n8n рабочий IPv6 хоста.
+    # Порт 5678 биндится напрямую; доступ к другим сервисам — через localhost.
+    network_mode: host
     environment:
       - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
       - WEBHOOK_URL=${N8N_PUBLIC_BASE_URL:-http://localhost:5678}
       # Доступ по HTTP без домена; при переходе на HTTPS-домен убрать
       - N8N_SECURE_COOKIE=false
       # Разрешить $env.* в выражениях workflow (WORKER_NAME, MAX_API_BASE_URL и др.)
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
-      # Предпочитать IPv4: у контейнера нет IPv6-egress, а api.telegram.org и
-      # некоторые API резолвятся в IPv6 → иначе "fetch failed".
-      - NODE_OPTIONS=--dns-result-order=ipv4first
+      # Предпочитать IPv6: Telegram отвечает только по IPv6. Supabase Session
+      # pooler и прочие API — IPv4-only, для них происходит обычный fallback.
+      - NODE_OPTIONS=--dns-result-order=ipv6first
       - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
       - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
       - WORKER_NAME=n8n-main
-      # workflow-переменные (см. n8n/README.md)
+      # workflow-переменные (см. n8n/README.md); host mode → соседи через localhost
       - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - APP_INTERNAL_URL=http://web:3000
+      - APP_INTERNAL_URL=http://127.0.0.1
       - VCRU_API_BASE=${VCRU_API_BASE:-https://api.vc.ru/v1.9}
-      - TELEGRAM_STATS_URL=http://telegram-collector:8081
+      - TELEGRAM_STATS_URL=http://127.0.0.1:8081
       - TELEGRAM_STATS_TOKEN=${TELEGRAM_STATS_TOKEN}
-      - VIDEO_RENDER_URL=http://video-worker:8082
+      - VIDEO_RENDER_URL=http://127.0.0.1:8082
       - VIDEO_RENDER_TOKEN=${VIDEO_RENDER_TOKEN}
       - MAX_API_BASE_URL=${MAX_API_BASE_URL:-https://botapi.max.ru}
       # Production: сокращаем хранение execution data (§7 реестра workflow)
