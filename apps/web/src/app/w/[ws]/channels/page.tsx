@@ -3,9 +3,16 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader, EmptyState, ConnectionStatusBadge } from "@/components/ui";
 import { PLATFORM_LABELS } from "@/lib/types";
 import type { Brand, Channel } from "@/lib/types";
-import { connectChannel, disconnectChannel, deleteChannel, syncChannelMetrics } from "./actions";
+import {
+  connectChannel,
+  disconnectChannel,
+  enableChannel,
+  deleteChannel,
+  syncChannelMetrics,
+} from "./actions";
 import { formatDateTime } from "@/lib/format";
 import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
+import { EditChannelForm } from "./edit-channel-form";
 
 export default async function ChannelsPage({
   params,
@@ -33,6 +40,7 @@ export default async function ChannelsPage({
   const admin = canAdmin(ctx.role);
   const connectAction = connectChannel.bind(null, ws);
   const disconnectAction = disconnectChannel.bind(null, ws);
+  const enableAction = enableChannel.bind(null, ws);
   const deleteAction = deleteChannel.bind(null, ws);
   const syncAction = syncChannelMetrics.bind(null, ws);
 
@@ -63,17 +71,24 @@ export default async function ChannelsPage({
                   )}
                 </p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <form action={syncAction}>
                   <input type="hidden" name="channel_id" value={c.id} />
                   <button className="btn-secondary">Синхронизировать</button>
                 </form>
+                {admin && c.status === "disabled" && (
+                  <form action={enableAction}>
+                    <input type="hidden" name="channel_id" value={c.id} />
+                    <button className="btn-secondary">Включить</button>
+                  </form>
+                )}
                 {admin && c.status !== "disabled" && (
                   <form action={disconnectAction}>
                     <input type="hidden" name="channel_id" value={c.id} />
                     <button className="btn-danger">Отключить</button>
                   </form>
                 )}
+                {admin && <EditChannelForm ws={ws} channel={c} />}
                 {admin && (
                   <form action={deleteAction}>
                     <input type="hidden" name="channel_id" value={c.id} />
