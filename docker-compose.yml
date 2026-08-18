@@ -32,6 +32,12 @@ services:
     depends_on:
       - n8n
       - video-worker
+    # Supabase (Cloudflare-фронтед) периодически недоступен напрямую с этого
+    # сервера — тот же класс блокировки, что и Telegram (см. tg-proxy-forward
+    # и supabase-proxy-forward ниже). Ломает вообще всё приложение (auth,
+    # запросы, storage), поэтому резолвим на форвардер так же, как n8n.
+    extra_hosts:
+      - "${NEXT_PUBLIC_SUPABASE_HOST}:172.18.0.10"
     networks:
       default:
       deploy_default:
@@ -135,23 +141,28 @@ services:
   # настоящим (api.telegram.org), поэтому сертификат проходит проверку как
   # обычно. n8n (network_mode: host) резолвит api.telegram.org на его
   # статический IP через extra_hosts выше.
+  # IP фиксируется отдельно через `docker network connect --ip` после
+  # создания (не через compose ipam) — сеть maria-smm-os_default общая
+  # с посторонним контейнером pgadmin, и compose не может её пересоздать.
   tg-proxy-forward:
     image: ginuerzh/gost
     restart: unless-stopped
     command: ["-L=tcp://:443/api.telegram.org:443", "-F=${TG_PROXY_URL}"]
-    networks:
-      default:
-        ipv4_address: 172.18.0.9
+
+  # То же самое для Supabase (Cloudflare-фронтед) — периодически недоступен
+  # с этого сервера напрямую тем же классом блокировки, что и Telegram,
+  # что ломает вход/сессии/запросы во всём приложении. IP фиксируется через
+  # `docker network connect --ip` после создания, как у tg-proxy-forward.
+  supabase-proxy-forward:
+    image: ginuerzh/gost
+    restart: unless-stopped
+    command: ["-L=tcp://:443/${NEXT_PUBLIC_SUPABASE_HOST}:443", "-F=${TG_PROXY_URL}"]
 
 volumes:
   n8n_data:
   whisper_cache:
 
 networks:
-  default:
-    ipam:
-      config:
-        - subnet: 172.18.0.0/16
   deploy_default:
     external: true
     name: deploy_default
