@@ -12,6 +12,7 @@ import {
 } from "../actions";
 import { SchedulePublicationForm } from "./schedule-form";
 import { AttachedMedia, type MediaAsset } from "./attach-media";
+import { FormattableField } from "@/components/formattable-field";
 
 export default async function ContentItemPage({
   params,
@@ -125,9 +126,9 @@ export default async function ContentItemPage({
         <div className="grid gap-4 md:grid-cols-3">
           <div className="md:col-span-2">
             <label className="label">Заголовок</label>
-            <input
+            <FormattableField
+              as="input"
               name="title"
-              className="input"
               defaultValue={item.title}
               disabled={!editable}
               required
@@ -196,9 +197,9 @@ export default async function ContentItemPage({
         </div>
         <div>
           <label className="label">Базовый текст</label>
-          <textarea
+          <FormattableField
+            as="textarea"
             name="base_text"
-            className="input"
             rows={4}
             defaultValue={item.base_text ?? ""}
             disabled={!editable}
@@ -252,18 +253,18 @@ export default async function ContentItemPage({
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="label">Заголовок</label>
-                    <input
+                    <FormattableField
+                      as="input"
                       name="title"
-                      className="input"
                       defaultValue={v.title ?? ""}
                       disabled={!editable}
                     />
                   </div>
                   <div>
                     <label className="label">Хук</label>
-                    <input
+                    <FormattableField
+                      as="input"
                       name="hook"
-                      className="input"
                       defaultValue={v.hook ?? ""}
                       disabled={!editable}
                     />
@@ -271,9 +272,9 @@ export default async function ContentItemPage({
                 </div>
                 <div>
                   <label className="label">Текст</label>
-                  <textarea
+                  <FormattableField
+                    as="textarea"
                     name="body"
-                    className="input"
                     rows={5}
                     defaultValue={v.body ?? ""}
                     disabled={!editable}
@@ -282,9 +283,9 @@ export default async function ContentItemPage({
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="label">CTA</label>
-                    <input
+                    <FormattableField
+                      as="input"
                       name="cta"
-                      className="input"
                       defaultValue={v.cta ?? ""}
                       disabled={!editable}
                     />
@@ -358,7 +359,7 @@ export default async function ContentItemPage({
           </div>
           <div>
             <label className="label">Текст</label>
-            <textarea name="body" className="input" rows={4} />
+            <FormattableField as="textarea" name="body" rows={4} />
           </div>
           <button className="btn-secondary">Добавить вариант</button>
         </form>

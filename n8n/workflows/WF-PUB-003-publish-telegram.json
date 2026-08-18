@@ -33,7 +33,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Идемпотентность: если внешний ID уже есть — не публикуем повторно\nconst row = $input.first().json;\nif (!row || !row.id) {\n  throw new Error('Publication not found or already processed');\n}\nif (row.external_post_id) {\n  return [{ json: { ...row, skip: true } }];\n}\nif (!row.secret_ref) {\n  throw new Error('No integration connection / secret_ref for channel');\n}\nconst text = [row.body, (row.hashtags ?? []).map(h => `#${h}`).join(' ')].filter(Boolean).join('\\n\\n');\nif (text.length > 4096) {\n  throw new Error('Message exceeds Telegram 4096 char limit');\n}\nreturn [{ json: { ...row, text, skip: false } }];"
+        "jsCode": "// Идемпотентность: если внешний ID уже есть — не публикуем повторно\nconst row = $input.first().json;\nif (!row || !row.id) {\n  throw new Error('Publication not found or already processed');\n}\nif (row.external_post_id) {\n  return [{ json: { ...row, skip: true } }];\n}\nif (!row.secret_ref) {\n  throw new Error('No integration connection / secret_ref for channel');\n}\n\nfunction escapeHtml(s) {\n  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n}\n\n// **жирный** / _курсив_ из редактора -> Telegram HTML-разметка (parse_mode=HTML)\nfunction toTelegramHtml(raw) {\n  return escapeHtml(raw)\n    .replace(/\\*\\*([^*]+)\\*\\*/g, '<b>$1</b>')\n    .replace(/_([^_]+)_/g, '<i>$1</i>');\n}\n\nconst bodyHtml = toTelegramHtml(row.body ?? '');\nconst hashtagsLine = (row.hashtags ?? []).map(h => `#${h}`).join(' ');\nconst text = [bodyHtml, hashtagsLine ? escapeHtml(hashtagsLine) : ''].filter(Boolean).join('\\n\\n');\nif (text.length > 4096) {\n  throw new Error('Message exceeds Telegram 4096 char limit');\n}\nreturn [{ json: { ...row, text, skip: false } }];"
       },
       "id": "guard",
       "name": "Idempotency Guard + Build Message",
@@ -73,6 +73,10 @@
             {
               "name": "text",
               "value": "={{ $('Idempotency Guard + Build Message').item.json.text }}"
+            },
+            {
+              "name": "parse_mode",
+              "value": "HTML"
             }
           ]
         },
