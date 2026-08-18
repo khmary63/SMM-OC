@@ -46,6 +46,13 @@ services:
     # доступа к соседним сервисам через localhost.
     # Порт 5678 биндится напрямую; доступ к другим сервисам — через localhost.
     network_mode: host
+    # Telegram Bot API недоступен с этого сервера напрямую (см. tg-proxy-forward
+    # ниже). При network_mode: host контейнер не резолвит имена соседних
+    # compose-сервисов, поэтому подменяем адрес напрямую на статический IP
+    # форвардера — единственный надёжный способ вместо per-node "Proxy" в
+    # HTTP Request node (axios не тоннелирует HTTPS через HTTP-прокси).
+    extra_hosts:
+      - "api.telegram.org:172.18.0.9"
     environment:
       - N8N_HOST=${N8N_HOST:-localhost}
       - N8N_PORT=5678
@@ -122,11 +129,29 @@ services:
     volumes:
       - whisper_cache:/root/.cache/huggingface
 
+  # Прозрачный TCP-форвардер до api.telegram.org:443 через внешний SOCKS5-прокси
+  # (Bot API не маршрутизируется с этого сервера напрямую ни по IPv4, ни по
+  # IPv6). Работает на уровне TCP, а не HTTP-прокси — TLS/SNI остаётся
+  # настоящим (api.telegram.org), поэтому сертификат проходит проверку как
+  # обычно. n8n (network_mode: host) резолвит api.telegram.org на его
+  # статический IP через extra_hosts выше.
+  tg-proxy-forward:
+    image: ginuerzh/gost
+    restart: unless-stopped
+    command: ["-L=tcp://:443/api.telegram.org:443", "-F=${TG_PROXY_URL}"]
+    networks:
+      default:
+        ipv4_address: 172.18.0.9
+
 volumes:
   n8n_data:
   whisper_cache:
 
 networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
   deploy_default:
     external: true
     name: deploy_default
