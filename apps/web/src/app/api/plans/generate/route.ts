@@ -12,6 +12,7 @@ export const POST = apiHandler<{
   brand_id?: string;
   month?: string; // YYYY-MM, по умолчанию следующий
   posts_per_week?: number;
+  instructions?: string;
 }>(async (body) => {
   const ctx = await requireApiContext(body.workspace_id);
   if (!canEditContent(ctx.role)) throw new ApiError("Недостаточно прав", 403);
@@ -19,7 +20,7 @@ export const POST = apiHandler<{
 
   const supabase = await createClient();
 
-  const [{ data: brand }, { data: profile }] = await Promise.all([
+  const [{ data: brand }, { data: profile }, { data: knowledgeSources }] = await Promise.all([
     supabase
       .from("brands")
       .select("id, name")
@@ -31,8 +32,32 @@ export const POST = apiHandler<{
       .select("*")
       .eq("brand_id", body.brand_id)
       .maybeSingle(),
+    supabase
+      .from("brand_knowledge_sources")
+      .select("kind, source_type, title, url, extracted_text")
+      .eq("brand_id", body.brand_id)
+      .order("created_at", { ascending: false }),
   ]);
   if (!brand) throw new ApiError("Бренд не найден", 404);
+
+  // База знаний (§ запрос пользователя): и файлы (текст извлечён при загрузке),
+  // и ссылки (передаются как есть, без автоматического скрапинга).
+  // Суммарно ограничиваем объём, чтобы не раздувать промпт.
+  const KNOWLEDGE_BUDGET = 24_000;
+  let knowledgeBudgetLeft = KNOWLEDGE_BUDGET;
+  const knowledgeParts: string[] = [];
+  for (const src of knowledgeSources ?? []) {
+    if (knowledgeBudgetLeft <= 0) break;
+    const header = `[${src.kind}] ${src.title}`;
+    const body_ =
+      src.source_type === "link"
+        ? `Ссылка: ${src.url}`
+        : (src.extracted_text ?? "(текст не извлечён)");
+    const chunk = `${header}\n${body_}`.slice(0, knowledgeBudgetLeft);
+    knowledgeParts.push(chunk);
+    knowledgeBudgetLeft -= chunk.length;
+  }
+  const knowledgeBase = knowledgeParts.length ? knowledgeParts.join("\n\n---\n\n") : null;
 
   const now = new Date();
   const month =
@@ -74,6 +99,9 @@ export const POST = apiHandler<{
       positioning: profile?.positioning,
       tone_of_voice: profile?.tone_of_voice,
       prompt_rules: profile?.prompt_rules,
+      brand_colors: profile?.brand_colors,
+      fonts: profile?.fonts,
+      visual_references: profile?.visual_references,
     },
     month,
     postsPerWeek: body.posts_per_week ?? 3,
@@ -82,6 +110,8 @@ export const POST = apiHandler<{
       rubric_performance: rubricSummary,
     },
     acceptedRecommendations: recommendations ?? [],
+    instructions: body.instructions,
+    knowledgeBase,
   });
 
   const created: string[] = [];

@@ -144,8 +144,11 @@ const server = http.createServer(async (req, res) => {
     if (!file.startsWith(WORK_DIR) || !fs.existsSync(file)) {
       return json(res, 404, { error: "not found" });
     }
+    const { size } = fs.statSync(file);
     res.writeHead(200, {
       "content-type": file.endsWith(".mp4") ? "video/mp4" : "image/jpeg",
+      "content-length": size,
+      connection: "close",
     });
     fs.createReadStream(file).pipe(res);
     return;

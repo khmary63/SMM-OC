@@ -3,8 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import { PageHeader, EmptyState, ConnectionStatusBadge } from "@/components/ui";
 import { PLATFORM_LABELS } from "@/lib/types";
 import type { Brand, Channel } from "@/lib/types";
-import { connectChannel, disconnectChannel, syncChannelMetrics } from "./actions";
+import { connectChannel, disconnectChannel, deleteChannel, syncChannelMetrics } from "./actions";
 import { formatDateTime } from "@/lib/format";
+import { ConfirmSubmitButton } from "@/components/confirm-submit-button";
 
 export default async function ChannelsPage({
   params,
@@ -32,6 +33,7 @@ export default async function ChannelsPage({
   const admin = canAdmin(ctx.role);
   const connectAction = connectChannel.bind(null, ws);
   const disconnectAction = disconnectChannel.bind(null, ws);
+  const deleteAction = deleteChannel.bind(null, ws);
   const syncAction = syncChannelMetrics.bind(null, ws);
 
   return (
@@ -70,6 +72,17 @@ export default async function ChannelsPage({
                   <form action={disconnectAction}>
                     <input type="hidden" name="channel_id" value={c.id} />
                     <button className="btn-danger">Отключить</button>
+                  </form>
+                )}
+                {admin && (
+                  <form action={deleteAction}>
+                    <input type="hidden" name="channel_id" value={c.id} />
+                    <ConfirmSubmitButton
+                      className="btn-danger"
+                      confirmText={`Удалить канал «${c.name}»? Это необратимо. Если по нему уже есть публикации — удаление не пройдёт, используйте «Отключить».`}
+                    >
+                      Удалить
+                    </ConfirmSubmitButton>
                   </form>
                 )}
               </div>

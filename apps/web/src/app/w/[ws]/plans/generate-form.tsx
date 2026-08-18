@@ -13,6 +13,7 @@ export function GeneratePlanForm({
   const router = useRouter();
   const [brandId, setBrandId] = useState(brands[0]?.id ?? "");
   const [postsPerWeek, setPostsPerWeek] = useState(3);
+  const [instructions, setInstructions] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
@@ -30,6 +31,7 @@ export function GeneratePlanForm({
           workspace_id: workspaceId,
           brand_id: brandId,
           posts_per_week: postsPerWeek,
+          instructions: instructions.trim() || undefined,
         }),
       });
       const json = await res.json();
@@ -78,6 +80,18 @@ export function GeneratePlanForm({
           className="input w-28"
           value={postsPerWeek}
           onChange={(e) => setPostsPerWeek(Number(e.target.value))}
+        />
+      </div>
+      <div className="w-full">
+        <label className="label">
+          Инструкции для этой генерации (необязательно)
+        </label>
+        <textarea
+          className="input"
+          rows={2}
+          value={instructions}
+          onChange={(e) => setInstructions(e.target.value)}
+          placeholder="Например: в этом месяце сделать упор на рубрику «Кейсы», добавить 2 темы про новую услугу…"
         />
       </div>
       <button className="btn-primary" disabled={loading}>

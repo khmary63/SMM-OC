@@ -140,9 +140,34 @@ export interface BrandProfile {
   tone_of_voice: string | null;
   prohibited_topics: string[];
   prohibited_phrases: string[];
+  brand_colors: string[];
+  fonts: string[];
+  visual_references: string[];
   prompt_rules: string | null;
   content_score_weights: Record<string, number>;
 }
+
+export type KnowledgeSourceKind = "editorial_calendar" | "brand_book" | "other";
+
+export interface BrandKnowledgeSource {
+  id: string;
+  workspace_id: string;
+  brand_id: string;
+  kind: KnowledgeSourceKind;
+  source_type: "file" | "link";
+  title: string;
+  url: string | null;
+  asset_id: string | null;
+  extracted_text: string | null;
+  extraction_status: "pending" | "done" | "unsupported" | "failed" | "not_applicable";
+  created_at: string;
+}
+
+export const KNOWLEDGE_KIND_LABELS: Record<KnowledgeSourceKind, string> = {
+  editorial_calendar: "Редакционный календарь",
+  brand_book: "Брендбук",
+  other: "Другое",
+};
 
 export interface Channel {
   id: string;
@@ -295,6 +320,7 @@ export interface MonthlyReport {
   period_end: string;
   status: JobStatus;
   summary_json: Record<string, unknown>;
+  report_asset_id: string | null;
   generated_at: string | null;
   created_at: string;
 }

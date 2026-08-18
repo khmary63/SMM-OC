@@ -102,6 +102,22 @@ export interface BrandContext {
   prohibited_topics?: string[];
   prohibited_phrases?: string[];
   prompt_rules?: string | null;
+  brand_colors?: string[];
+  fonts?: string[];
+  visual_references?: string[];
+}
+
+/** Текстовое описание визуального стиля бренда для промптов генерации картинок. */
+export function buildBrandStyleDirective(brand: BrandContext): string | null {
+  const parts = [
+    brand.brand_colors?.length &&
+      `фирменные цвета: ${brand.brand_colors.join(", ")}`,
+    brand.fonts?.length && `фирменные шрифты: ${brand.fonts.join(", ")}`,
+    brand.visual_references?.length &&
+      `визуальные референсы/стиль: ${brand.visual_references.join("; ")}`,
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  return `Выдержи фирменный стиль бренда «${brand.name}»: ${parts.join("; ")}.`;
 }
 
 export interface GeneratedVariant {
@@ -188,13 +204,24 @@ export async function generateNextMonthPlan(params: {
   postsPerWeek: number;
   performanceSummary: Record<string, unknown>;
   acceptedRecommendations: { action: string; reason: string }[];
+  /** Свободные инструкции пользователя для конкретно этой генерации. */
+  instructions?: string | null;
+  /** Текст из базы знаний бренда (редакционный календарь, брендбук — файлы и ссылки). */
+  knowledgeBase?: string | null;
 }): Promise<{ summary: string; topics: PlanTopic[] }> {
   const system = [
     "Ты — контент-стратег платформы MARIA SMM OS.",
     "Планируй по правилу распределения 60% проверенный контент / 25% развитие / 15% эксперименты.",
     "Каждая экспериментальная тема должна содержать проверяемую гипотезу.",
+    params.knowledgeBase &&
+      "Тебе передана база знаний бренда (редакционный календарь с рубриками и уже выпущенным контентом, брендбук). " +
+        "Обязательно опирайся на неё: используй существующие рубрики вместо выдуманных, не повторяй уже выпущенные темы дословно, соблюдай стиль из брендбука.",
+    params.instructions &&
+      "Пользователь передал инструкции для этой генерации — они имеют приоритет над твоими общими предположениями, но не должны нарушать запрещённые темы/фразы бренда.",
     'Отвечай СТРОГО валидным JSON: {"summary":"", "topics":[{"date":"YYYY-MM-DD","title","rubric","format","goal","hypothesis"}]}. Без markdown.',
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const user = [
     `Бренд: ${params.brand.name}. ${params.brand.positioning ?? ""}`,
@@ -203,7 +230,11 @@ export async function generateNextMonthPlan(params: {
     params.acceptedRecommendations.length
       ? `Принятые рекомендации: ${JSON.stringify(params.acceptedRecommendations)}`
       : "Принятых рекомендаций нет.",
-  ].join("\n\n");
+    params.instructions && `Инструкции пользователя для этого плана:\n${params.instructions}`,
+    params.knowledgeBase && `База знаний бренда:\n${params.knowledgeBase}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   const text = await chat(system, user, 8000);
   return parseJsonObject(text);
@@ -237,6 +268,86 @@ export async function generateInsights(
 
   const text = await chat(system, JSON.stringify(evidenceJson), 6000);
   return parseJsonObject(text);
+}
+
+export interface GeneratedImage {
+  bytes: Buffer;
+  mimeType: string;
+}
+
+/**
+ * Генерация изображения (WF-CONTENT-002). Провайдер настраивается, а не
+ * зашивается в workflow (§16.9): используется тот же OpenAI-совместимый
+ * шлюз, что и для текста (AI_BASE_URL/AI_API_KEY), endpoint /images/generations.
+ * Для AI_PROVIDER=anthropic (нет images API) — явная ошибка с инструкцией.
+ */
+export async function generateImage(params: {
+  prompt: string;
+  dimensions?: string; // "1024x1024"
+  /** Директива фирменного стиля (см. buildBrandStyleDirective) — добавляется к промпту. */
+  brandStyle?: string | null;
+}): Promise<GeneratedImage> {
+  if (PROVIDER !== "openai") {
+    throw new Error(
+      "Генерация изображений требует AI_PROVIDER=openai с images-совместимым " +
+        "шлюзом (AI_BASE_URL/AI_API_KEY). Текущий провайдер: " +
+        `${PROVIDER}.`
+    );
+  }
+
+  const fullPrompt = params.brandStyle
+    ? `${params.prompt}\n\n${params.brandStyle}`
+    : params.prompt;
+
+  const baseUrl = (process.env.AI_BASE_URL || "https://openrouter.ai/api/v1").replace(
+    /\/+$/,
+    ""
+  );
+  const apiKey = (process.env.AI_API_KEY || "").trim();
+  if (!apiKey) {
+    throw new Error("AI_API_KEY не настроен (нужен для AI_PROVIDER=openai)");
+  }
+  const badChar = [...apiKey].find((c) => c.charCodeAt(0) > 127);
+  if (badChar) {
+    throw new Error(
+      `AI_API_KEY содержит недопустимый (не-латинский) символ «${badChar}»`
+    );
+  }
+
+  const imageModel = process.env.AI_IMAGE_MODEL || "dall-e-3";
+  const res = await fetch(`${baseUrl}/images/generations`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: imageModel,
+      prompt: fullPrompt,
+      size: params.dimensions || "1024x1024",
+      n: 1,
+      response_format: "b64_json",
+    }),
+    signal: AbortSignal.timeout(120000),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Image provider ${res.status}: ${text.slice(0, 300)}`);
+  }
+
+  const json = (await res.json()) as { data?: { b64_json?: string; url?: string }[] };
+  const item = json.data?.[0];
+  if (item?.b64_json) {
+    return { bytes: Buffer.from(item.b64_json, "base64"), mimeType: "image/png" };
+  }
+  if (item?.url) {
+    const imgRes = await fetch(item.url, { signal: AbortSignal.timeout(60000) });
+    if (!imgRes.ok) throw new Error(`Не удалось скачать сгенерированное изображение: ${imgRes.status}`);
+    const buf = Buffer.from(await imgRes.arrayBuffer());
+    return { bytes: buf, mimeType: imgRes.headers.get("content-type") || "image/png" };
+  }
+  throw new Error("Image provider не вернул изображение");
 }
 
 function stripFences(text: string): string {

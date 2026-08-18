@@ -94,6 +94,34 @@ export async function disconnectChannel(ws: string, formData: FormData) {
   revalidatePath(`/w/${ws}/channels`);
 }
 
+/**
+ * Полное удаление канала. Разрешено, только если по каналу ещё нет
+ * публикаций (защита БД: publications.channel_id — on delete restrict).
+ * Черновики адаптаций контента для этого канала удалятся вместе с ним
+ * (content_variants.channel_id — on delete cascade), это ожидаемо.
+ */
+export async function deleteChannel(ws: string, formData: FormData) {
+  const ctx = await requireWorkspace(ws);
+  if (!canAdmin(ctx.role)) throw new Error("Недостаточно прав");
+
+  const supabase = await createClient();
+  const channelId = String(formData.get("channel_id"));
+  const { error } = await supabase
+    .from("channels")
+    .delete()
+    .eq("id", channelId)
+    .eq("workspace_id", ctx.workspace.id);
+  if (error) {
+    if (error.code === "23503") {
+      throw new Error(
+        "По этому каналу уже есть публикации — удалить нельзя, чтобы не потерять историю. Используйте «Отключить»."
+      );
+    }
+    throw new Error(error.message);
+  }
+  revalidatePath(`/w/${ws}/channels`);
+}
+
 export async function syncChannelMetrics(ws: string, formData: FormData) {
   const ctx = await requireWorkspace(ws);
   const channelId = String(formData.get("channel_id"));

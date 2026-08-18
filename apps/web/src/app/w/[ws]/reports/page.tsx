@@ -36,6 +36,29 @@ export default async function ReportsPage({
       .eq("status", "active"),
   ]);
 
+  // Подписанные ссылки на PDF готовых отчётов (bucket приватный)
+  const reportAssetIds = ((reports ?? []) as MonthlyReport[])
+    .map((r) => r.report_asset_id)
+    .filter((id): id is string => Boolean(id));
+  const downloadUrls = new Map<string, string>();
+  if (reportAssetIds.length > 0) {
+    const { data: reportAssets } = await supabase
+      .from("assets")
+      .select("id, storage_path")
+      .in("id", reportAssetIds);
+    if (reportAssets && reportAssets.length > 0) {
+      const { data: signed } = await supabase.storage
+        .from("smm-assets")
+        .createSignedUrls(
+          reportAssets.map((a) => a.storage_path),
+          3600
+        );
+      signed?.forEach((s, i) => {
+        if (s.signedUrl) downloadUrls.set(reportAssets[i].id, s.signedUrl);
+      });
+    }
+  }
+
   return (
     <div>
       <PageHeader
@@ -68,6 +91,16 @@ export default async function ReportsPage({
                   {r.generated_at && ` · сформирован ${formatDateTime(r.generated_at)}`}
                 </p>
               </div>
+              {r.status === "succeeded" && r.report_asset_id && downloadUrls.has(r.report_asset_id) && (
+                <a
+                  href={downloadUrls.get(r.report_asset_id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-secondary text-xs"
+                >
+                  Скачать PDF
+                </a>
+              )}
               <span
                 className={`badge ${
                   r.status === "succeeded"

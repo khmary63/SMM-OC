@@ -12,7 +12,8 @@ services:
         - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
     restart: unless-stopped
     ports:
-      - "80:3000"
+      - "127.0.0.1:3000:3000"
+      - "172.17.0.1:3000:3000"
     environment:
       - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
@@ -22,16 +23,27 @@ services:
       - AI_BASE_URL=${AI_BASE_URL}
       - AI_API_KEY=${AI_API_KEY}
       - AI_MODEL=${AI_MODEL:-claude-sonnet-5}
+      - AI_IMAGE_MODEL=${AI_IMAGE_MODEL:-dall-e-3}
       - APP_BASE_URL=${APP_BASE_URL:-http://localhost}
       - N8N_WEBHOOK_URL=http://n8n:5678/webhook/smm-os/jobs
       - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
+      - VIDEO_RENDER_URL=http://video-worker:8082
+      - VIDEO_RENDER_TOKEN=${VIDEO_RENDER_TOKEN}
     depends_on:
       - n8n
+      - video-worker
+    networks:
+      default:
+      deploy_default:
+        aliases:
+          - maria-web
   n8n:
     image: n8nio/n8n:latest
     restart: unless-stopped
-    # Сеть хоста: с этого сервера Telegram доступен только по IPv6, а у
-    # bridge-контейнера IPv6 нет. Host networking даёт n8n рабочий IPv6 хоста.
+    # Сеть хоста: раньше нужна была для IPv6 к Telegram; сейчас IPv6 с этого
+    # сервера не маршрутизируется ни до Telegram, ни до Google (проверено
+    # curl -6 напрямую с хоста) — оставлено host networking ради простоты
+    # доступа к соседним сервисам через localhost.
     # Порт 5678 биндится напрямую; доступ к другим сервисам — через localhost.
     network_mode: host
     environment:
@@ -42,16 +54,24 @@ services:
       - N8N_SECURE_COOKIE=false
       # Разрешить $env.* в выражениях workflow (WORKER_NAME, MAX_API_BASE_URL и др.)
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
-      # Предпочитать IPv6: Telegram отвечает только по IPv6. Supabase Session
-      # pooler и прочие API — IPv4-only, для них происходит обычный fallback.
-      - NODE_OPTIONS=--dns-result-order=ipv6first
+      # JS Task Runner (внешний sandbox) по умолчанию блокирует require() встроенных
+      # модулей Node. HMAC-подпись webhook-payload'ов (WF-CORE-002/004 и все job-обвязки)
+      # требует crypto — разрешаем явно.
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      # --dns-result-order=ipv6first убран 2026-08-13: IPv6 с этого сервера
+      # больше не маршрутизируется до Google, из-за чего Calendar/Gmail OAuth
+      # и другие dual-stack хосты падали с ENETUNREACH (fetch/undici не
+      # делает fallback на IPv4 сам). Telegram Bot API по-прежнему недоступен
+      # напрямую ни по IPv4, ни по IPv6 — для него нужен отдельный прокси,
+      # обычный DNS-порядок это не меняет.
       - GENERIC_TIMEZONE=${TZ:-Europe/Moscow}
       - N8N_WEBHOOK_TOKEN=${N8N_WEBHOOK_TOKEN}
       - WORKER_NAME=n8n-main
       # workflow-переменные (см. n8n/README.md); host mode → соседи через localhost
       - SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
-      - APP_INTERNAL_URL=http://127.0.0.1
+      # Порт 80 на хосте занят Caddy — без :3000 запросы уходили не туда.
+      - APP_INTERNAL_URL=http://127.0.0.1:3000
       - VCRU_API_BASE=${VCRU_API_BASE:-https://api.vc.ru/v1.9}
       - TELEGRAM_STATS_URL=http://127.0.0.1:8081
       - TELEGRAM_STATS_TOKEN=${TELEGRAM_STATS_TOKEN}
@@ -85,5 +105,28 @@ services:
     environment:
       - VIDEO_RENDER_TOKEN=${VIDEO_RENDER_TOKEN}
 
+  # Локальный Whisper (OpenAI-совместимый /v1/audio/transcriptions) — шлюз
+  # Vsellm транскрибацию не поддерживает (нет ни одной STT-модели в каталоге),
+  # а прямые OpenAI/Groq заблокированы по гео с этого сервера. Используется
+  # нодой "Transcribe a recording" в workflow MANAGER MAX через отдельный
+  # credential с baseURL на этот сервис. Порт только на loopback — без auth.
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8083:8000"
+    environment:
+      - WHISPER__MODEL=Systran/faster-whisper-small
+      - WHISPER__INFERENCE_DEVICE=cpu
+      - WHISPER__COMPUTE_TYPE=int8
+    volumes:
+      - whisper_cache:/root/.cache/huggingface
+
 volumes:
   n8n_data:
+  whisper_cache:
+
+networks:
+  deploy_default:
+    external: true
+    name: deploy_default
