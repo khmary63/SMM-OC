@@ -36,68 +36,89 @@ export function UploadForm({
   brands: { id: string; name: string }[];
 }) {
   const router = useRouter();
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [brandId, setBrandId] = useState(brands[0]?.id ?? "");
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
+
+  async function uploadOne(file: File) {
+    const supabase = createClient();
+    const assetId = generateUuid();
+    const safeName = file.name.replace(/[^\w.\-()а-яА-ЯёЁ ]+/g, "_");
+    const path = `${workspaceId}/${brandId || "shared"}/${assetId}/${safeName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("smm-assets")
+      .upload(path, file, { contentType: file.type });
+    if (uploadError) throw uploadError;
+
+    const type = file.type.startsWith("image/")
+      ? "image"
+      : file.type.startsWith("video/")
+        ? "video"
+        : file.type.startsWith("audio/")
+          ? "audio"
+          : "document";
+
+    const { error: insertError } = await supabase.from("assets").insert({
+      id: assetId,
+      workspace_id: workspaceId,
+      brand_id: brandId || null,
+      type,
+      storage_bucket: "smm-assets",
+      storage_path: path,
+      file_name: file.name,
+      mime_type: file.type,
+      size_bytes: file.size,
+    });
+    if (insertError) throw insertError;
+  }
 
   async function upload(e: React.FormEvent) {
     e.preventDefault();
-    if (!file) return;
+    if (files.length === 0) return;
     setLoading(true);
     setError(null);
+    setProgress({ done: 0, total: files.length });
 
-    try {
-      const supabase = createClient();
-      const assetId = generateUuid();
-      const safeName = file.name.replace(/[^\w.\-()а-яА-ЯёЁ ]+/g, "_");
-      const path = `${workspaceId}/${brandId || "shared"}/${assetId}/${safeName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("smm-assets")
-        .upload(path, file, { contentType: file.type });
-      if (uploadError) throw uploadError;
-
-      const type = file.type.startsWith("image/")
-        ? "image"
-        : file.type.startsWith("video/")
-          ? "video"
-          : file.type.startsWith("audio/")
-            ? "audio"
-            : "document";
-
-      const { error: insertError } = await supabase.from("assets").insert({
-        id: assetId,
-        workspace_id: workspaceId,
-        brand_id: brandId || null,
-        type,
-        storage_bucket: "smm-assets",
-        storage_path: path,
-        file_name: file.name,
-        mime_type: file.type,
-        size_bytes: file.size,
-      });
-      if (insertError) throw insertError;
-
-      setFile(null);
-      router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка загрузки");
-    } finally {
-      setLoading(false);
+    const failed: string[] = [];
+    for (const file of files) {
+      try {
+        await uploadOne(file);
+      } catch (err) {
+        failed.push(
+          `${file.name}: ${err instanceof Error ? err.message : "ошибка"}`
+        );
+      }
+      setProgress((p) => (p ? { done: p.done + 1, total: p.total } : p));
     }
+
+    setLoading(false);
+    setProgress(null);
+    setFiles([]);
+    if (failed.length > 0) setError(failed.join("; "));
+    router.refresh();
   }
 
   return (
     <form onSubmit={upload} className="card flex flex-wrap items-end gap-3">
       <div>
-        <label className="label">Файл</label>
+        <label className="label">Файлы</label>
         <input
           type="file"
           className="input"
+          multiple
           accept="image/*,video/*,audio/*,.pdf"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
         />
+        {files.length > 0 && (
+          <p className="mt-1 text-xs text-zinc-500">
+            Выбрано файлов: {files.length}
+          </p>
+        )}
       </div>
       <div>
         <label className="label">Бренд</label>
@@ -114,8 +135,12 @@ export function UploadForm({
           ))}
         </select>
       </div>
-      <button className="btn-primary" disabled={!file || loading}>
-        {loading ? "Загрузка…" : "Загрузить"}
+      <button className="btn-primary" disabled={files.length === 0 || loading}>
+        {loading
+          ? `Загрузка… ${progress ? `${progress.done}/${progress.total}` : ""}`
+          : files.length > 1
+            ? `Загрузить (${files.length})`
+            : "Загрузить"}
       </button>
       {error && <p className="w-full text-sm text-red-600">{error}</p>}
     </form>
