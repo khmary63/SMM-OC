@@ -9,8 +9,11 @@ import {
   saveVariant,
   generateVariants,
   requestApproval,
+  attachAssetToVariant,
+  detachAssetFromVariant,
 } from "../actions";
 import { SchedulePublicationForm } from "./schedule-form";
+import { VariantMedia, type MediaAsset } from "./variant-media";
 
 export default async function ContentItemPage({
   params,
@@ -60,6 +63,94 @@ export default async function ContentItemPage({
     const key = v.channel_id ?? "base";
     if (!latestByChannel.has(key)) latestByChannel.set(key, v);
   }
+
+  const shownVariantIds = [...latestByChannel.values()].map((v) => v.id);
+
+  // Вложения показанных вариантов (content_assets → assets).
+  type AssetRow = {
+    id: string;
+    file_name: string;
+    type: string;
+    mime_type: string | null;
+    storage_path: string;
+  };
+  const attachmentsByVariant = new Map<string, MediaAsset[]>();
+  let availableAssets: AssetRow[] = [];
+  const signedByPath = new Map<string, string>();
+
+  if (shownVariantIds.length > 0) {
+    const [{ data: links }, { data: assets }] = await Promise.all([
+      supabase
+        .from("content_assets")
+        .select(
+          "content_variant_id, sort_order, assets(id, file_name, type, mime_type, storage_path)"
+        )
+        .in("content_variant_id", shownVariantIds)
+        .order("sort_order", { ascending: true }),
+      // Доступные для прикрепления файлы: бренд поста или общие.
+      supabase
+        .from("assets")
+        .select("id, file_name, type, mime_type, storage_path")
+        .eq("workspace_id", ctx.workspace.id)
+        .or(`brand_id.eq.${item.brand_id},brand_id.is.null`)
+        .order("created_at", { ascending: false })
+        .limit(100),
+    ]);
+
+    availableAssets = (assets ?? []) as AssetRow[];
+
+    // Подписанные URL для превью изображений (bucket приватный).
+    const pathsToSign = new Set<string>();
+    for (const a of availableAssets) {
+      if (a.mime_type?.startsWith("image/")) pathsToSign.add(a.storage_path);
+    }
+    type LinkRow = {
+      content_variant_id: string;
+      assets: AssetRow | null;
+    };
+    for (const l of (links ?? []) as unknown as LinkRow[]) {
+      if (l.assets?.mime_type?.startsWith("image/")) {
+        pathsToSign.add(l.assets.storage_path);
+      }
+    }
+    if (pathsToSign.size > 0) {
+      const paths = [...pathsToSign];
+      const { data: signed } = await supabase.storage
+        .from("smm-assets")
+        .createSignedUrls(paths, 3600);
+      signed?.forEach((s, i) => {
+        if (s.signedUrl) signedByPath.set(paths[i], s.signedUrl);
+      });
+    }
+
+    const toMediaAsset = (a: AssetRow): MediaAsset => ({
+      id: a.id,
+      fileName: a.file_name,
+      type: a.type,
+      previewUrl: a.mime_type?.startsWith("image/")
+        ? signedByPath.get(a.storage_path)
+        : undefined,
+    });
+
+    for (const l of (links ?? []) as unknown as LinkRow[]) {
+      if (!l.assets) continue;
+      const list = attachmentsByVariant.get(l.content_variant_id) ?? [];
+      list.push(toMediaAsset(l.assets));
+      attachmentsByVariant.set(l.content_variant_id, list);
+    }
+  }
+
+  const availableMedia: MediaAsset[] = availableAssets.map((a) => ({
+    id: a.id,
+    fileName: a.file_name,
+    type: a.type,
+    previewUrl: a.mime_type?.startsWith("image/")
+      ? signedByPath.get(a.storage_path)
+      : undefined,
+  }));
+
+  const attachAction = attachAssetToVariant.bind(null, ws);
+  const detachAction = detachAssetFromVariant.bind(null, ws);
 
   const toLocalInput = (iso: string | null) =>
     iso ? new Date(iso).toISOString().slice(0, 16) : "";
@@ -254,6 +345,16 @@ export default async function ContentItemPage({
                   </div>
                 )}
               </form>
+
+              <VariantMedia
+                variantId={v.id}
+                contentItemId={item.id}
+                attached={attachmentsByVariant.get(v.id) ?? []}
+                available={availableMedia}
+                editable={editable}
+                attachAction={attachAction}
+                detachAction={detachAction}
+              />
 
               <div className="mt-3 flex flex-wrap gap-2 border-t border-zinc-100 pt-3">
                 {editable &&

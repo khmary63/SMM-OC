@@ -95,16 +95,37 @@ export async function saveVariant(ws: string, formData: FormData) {
     if (curError) throw new Error(curError.message);
 
     if (["approved", "awaiting_approval"].includes(current.status)) {
-      const { error } = await supabase.from("content_variants").insert({
-        workspace_id: ctx.workspace.id,
-        content_item_id: contentItemId,
-        channel_id: current.channel_id,
-        version_no: current.version_no + 1,
-        ...fields,
-        status: "in_progress",
-        created_by: ctx.userId,
-      });
+      const { data: newVariant, error } = await supabase
+        .from("content_variants")
+        .insert({
+          workspace_id: ctx.workspace.id,
+          content_item_id: contentItemId,
+          channel_id: current.channel_id,
+          version_no: current.version_no + 1,
+          ...fields,
+          status: "in_progress",
+          created_by: ctx.userId,
+        })
+        .select("id")
+        .single();
       if (error) throw new Error(error.message);
+
+      // Переносим прикреплённые медиа на новую версию.
+      const { data: prevAssets } = await supabase
+        .from("content_assets")
+        .select("asset_id, role, sort_order")
+        .eq("content_variant_id", variantId);
+      if (prevAssets && prevAssets.length > 0) {
+        await supabase.from("content_assets").insert(
+          prevAssets.map((a) => ({
+            workspace_id: ctx.workspace.id,
+            content_variant_id: newVariant.id,
+            asset_id: a.asset_id,
+            role: a.role,
+            sort_order: a.sort_order,
+          }))
+        );
+      }
     } else {
       const { error } = await supabase
         .from("content_variants")
@@ -137,6 +158,80 @@ export async function saveVariant(ws: string, formData: FormData) {
     });
     if (error) throw new Error(error.message);
   }
+
+  revalidatePath(`/w/${ws}/content/${contentItemId}`);
+}
+
+/** Прикрепить медиафайл из медиатеки к варианту (content_assets). */
+export async function attachAssetToVariant(ws: string, formData: FormData) {
+  const ctx = await requireWorkspace(ws);
+  if (!canEditContent(ctx.role)) throw new Error("Недостаточно прав");
+
+  const supabase = await createClient();
+  const variantId = String(formData.get("variant_id"));
+  const assetId = String(formData.get("asset_id"));
+  const contentItemId = String(formData.get("content_item_id"));
+  if (!variantId || !assetId) throw new Error("Не указан вариант или файл");
+
+  // Проверяем, что и вариант, и ассет принадлежат воркспейсу.
+  const [{ data: variant }, { data: asset }] = await Promise.all([
+    supabase
+      .from("content_variants")
+      .select("id, workspace_id")
+      .eq("id", variantId)
+      .eq("workspace_id", ctx.workspace.id)
+      .maybeSingle(),
+    supabase
+      .from("assets")
+      .select("id, type")
+      .eq("id", assetId)
+      .eq("workspace_id", ctx.workspace.id)
+      .maybeSingle(),
+  ]);
+  if (!variant) throw new Error("Вариант не найден");
+  if (!asset) throw new Error("Файл не найден в медиатеке");
+
+  // Порядок сортировки — в конец существующих вложений.
+  const { data: last } = await supabase
+    .from("content_assets")
+    .select("sort_order")
+    .eq("content_variant_id", variantId)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const { error } = await supabase.from("content_assets").upsert(
+    {
+      workspace_id: ctx.workspace.id,
+      content_variant_id: variantId,
+      asset_id: assetId,
+      role: "attachment",
+      sort_order: (last?.sort_order ?? -1) + 1,
+    },
+    { onConflict: "content_variant_id,asset_id,role", ignoreDuplicates: true }
+  );
+  if (error) throw new Error(error.message);
+
+  revalidatePath(`/w/${ws}/content/${contentItemId}`);
+}
+
+/** Открепить медиафайл от варианта. */
+export async function detachAssetFromVariant(ws: string, formData: FormData) {
+  const ctx = await requireWorkspace(ws);
+  if (!canEditContent(ctx.role)) throw new Error("Недостаточно прав");
+
+  const supabase = await createClient();
+  const variantId = String(formData.get("variant_id"));
+  const assetId = String(formData.get("asset_id"));
+  const contentItemId = String(formData.get("content_item_id"));
+
+  const { error } = await supabase
+    .from("content_assets")
+    .delete()
+    .eq("workspace_id", ctx.workspace.id)
+    .eq("content_variant_id", variantId)
+    .eq("asset_id", assetId);
+  if (error) throw new Error(error.message);
 
   revalidatePath(`/w/${ws}/content/${contentItemId}`);
 }
