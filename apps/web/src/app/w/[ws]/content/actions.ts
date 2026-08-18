@@ -141,6 +141,62 @@ export async function saveVariant(ws: string, formData: FormData) {
   revalidatePath(`/w/${ws}/content/${contentItemId}`);
 }
 
+/** Прикрепление файлов из Медиатеки к карточке контента целиком. */
+export async function attachContentItemAssets(ws: string, formData: FormData) {
+  const ctx = await requireWorkspace(ws);
+  if (!canEditContent(ctx.role)) throw new Error("Недостаточно прав");
+
+  const supabase = await createClient();
+  const contentItemId = String(formData.get("content_item_id"));
+  const assetIds = [...new Set(formData.getAll("asset_ids").map(String))].filter(
+    Boolean
+  );
+  if (assetIds.length === 0) return;
+
+  const { data: last } = await supabase
+    .from("content_item_assets")
+    .select("sort_order")
+    .eq("content_item_id", contentItemId)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  let nextOrder = (last?.sort_order ?? -1) + 1;
+
+  const rows = assetIds.map((assetId) => ({
+    workspace_id: ctx.workspace.id,
+    content_item_id: contentItemId,
+    asset_id: assetId,
+    sort_order: nextOrder++,
+    created_by: ctx.userId,
+  }));
+
+  const { error } = await supabase
+    .from("content_item_assets")
+    .upsert(rows, { onConflict: "content_item_id,asset_id", ignoreDuplicates: true });
+  if (error) throw new Error(error.message);
+
+  revalidatePath(`/w/${ws}/content/${contentItemId}`);
+}
+
+/** Открепление одного файла от карточки контента. */
+export async function removeContentItemAsset(ws: string, formData: FormData) {
+  const ctx = await requireWorkspace(ws);
+  if (!canEditContent(ctx.role)) throw new Error("Недостаточно прав");
+
+  const supabase = await createClient();
+  const contentItemId = String(formData.get("content_item_id"));
+  const assetId = String(formData.get("asset_id"));
+
+  const { error } = await supabase
+    .from("content_item_assets")
+    .delete()
+    .eq("content_item_id", contentItemId)
+    .eq("asset_id", assetId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath(`/w/${ws}/content/${contentItemId}`);
+}
+
 /** AI-генерация адаптаций (аналог WF-CONTENT-001, синхронный путь). */
 export async function generateVariants(ws: string, formData: FormData) {
   const ctx = await requireWorkspace(ws);

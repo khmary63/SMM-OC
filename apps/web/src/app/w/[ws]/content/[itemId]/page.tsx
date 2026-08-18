@@ -3,7 +3,7 @@ import { requireWorkspace, canEditContent } from "@/lib/workspace";
 import { createClient } from "@/lib/supabase/server";
 import { PageHeader, ContentStatusBadge } from "@/components/ui";
 import { FORMAT_LABELS, GOAL_LABELS, PLATFORM_LABELS } from "@/lib/types";
-import type { Channel, ContentItem, ContentVariant } from "@/lib/types";
+import type { Asset, Channel, ContentItem, ContentVariant } from "@/lib/types";
 import {
   updateContentItem,
   saveVariant,
@@ -11,6 +11,7 @@ import {
   requestApproval,
 } from "../actions";
 import { SchedulePublicationForm } from "./schedule-form";
+import { AttachedMedia, type MediaAsset } from "./attach-media";
 
 export default async function ContentItemPage({
   params,
@@ -29,22 +30,68 @@ export default async function ContentItemPage({
     .maybeSingle<ContentItem & { brands: { name: string } | null }>();
   if (!item) notFound();
 
-  const [{ data: variants }, { data: channels }] = await Promise.all([
-    supabase
-      .from("content_variants")
-      .select("*")
-      .eq("content_item_id", itemId)
-      .order("channel_id", { ascending: true, nullsFirst: true })
-      .order("version_no", { ascending: false }),
-    supabase
-      .from("channels")
-      .select("*")
-      .eq("brand_id", item.brand_id)
-      .neq("status", "disabled")
-      .order("name"),
-  ]);
+  const [{ data: variants }, { data: channels }, { data: attachedRows }, { data: brandAssets }] =
+    await Promise.all([
+      supabase
+        .from("content_variants")
+        .select("*")
+        .eq("content_item_id", itemId)
+        .order("channel_id", { ascending: true, nullsFirst: true })
+        .order("version_no", { ascending: false }),
+      supabase
+        .from("channels")
+        .select("*")
+        .eq("brand_id", item.brand_id)
+        .neq("status", "disabled")
+        .order("name"),
+      supabase
+        .from("content_item_assets")
+        .select("asset_id, sort_order, assets(*)")
+        .eq("content_item_id", itemId)
+        .order("sort_order", { ascending: true }),
+      supabase
+        .from("assets")
+        .select("*")
+        .eq("workspace_id", ctx.workspace.id)
+        .or(`brand_id.eq.${item.brand_id},brand_id.is.null`)
+        .order("created_at", { ascending: false })
+        .limit(200),
+    ]);
 
   const editable = canEditContent(ctx.role);
+
+  const attachedAssets = (
+    (attachedRows ?? []) as unknown as { asset_id: string; assets: Asset | null }[]
+  )
+    .map((r) => r.assets)
+    .filter((a): a is Asset => a !== null);
+  const attachedIds = new Set(attachedAssets.map((a) => a.id));
+  const availableAssets = ((brandAssets ?? []) as Asset[]).filter(
+    (a) => !attachedIds.has(a.id)
+  );
+
+  const imageAssets = [...attachedAssets, ...availableAssets].filter((a) =>
+    a.mime_type?.startsWith("image/")
+  );
+  const signedUrls = new Map<string, string>();
+  if (imageAssets.length > 0) {
+    const { data: signed } = await supabase.storage
+      .from("smm-assets")
+      .createSignedUrls(
+        imageAssets.map((a) => a.storage_path),
+        3600
+      );
+    signed?.forEach((s, i) => {
+      if (s.signedUrl) signedUrls.set(imageAssets[i].id, s.signedUrl);
+    });
+  }
+
+  const toMediaAsset = (a: Asset): MediaAsset => ({
+    id: a.id,
+    fileName: a.file_name,
+    type: a.type,
+    url: signedUrls.get(a.id),
+  });
   const updateAction = updateContentItem.bind(null, ws);
   const saveVariantAction = saveVariant.bind(null, ws);
   const generateAction = generateVariants.bind(null, ws);
@@ -172,6 +219,14 @@ export default async function ContentItemPage({
           </button>
         </form>
       )}
+
+      <AttachedMedia
+        ws={ws}
+        contentItemId={item.id}
+        attached={attachedAssets.map(toMediaAsset)}
+        available={availableAssets.map(toMediaAsset)}
+        editable={editable}
+      />
 
       <h2 className="mt-8 mb-3 text-lg font-semibold">Адаптации по каналам</h2>
       <div className="space-y-4">

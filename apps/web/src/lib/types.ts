@@ -235,6 +235,15 @@ export interface Asset {
   created_at: string;
 }
 
+export interface ContentItemAsset {
+  workspace_id: string;
+  content_item_id: string;
+  asset_id: string;
+  sort_order: number;
+  created_at: string;
+  created_by: string | null;
+}
+
 export interface Approval {
   id: string;
   workspace_id: string;
