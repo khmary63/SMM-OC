@@ -14,6 +14,7 @@ const { randomUUID } = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { prepareReel } = require("./reel");
 
 const PORT = Number(process.env.PORT || 8082);
 const TOKEN = process.env.VIDEO_RENDER_TOKEN || "";
@@ -21,7 +22,10 @@ const WORK_DIR = process.env.WORK_DIR || path.join(os.tmpdir(), "maria-render");
 
 fs.mkdirSync(WORK_DIR, { recursive: true });
 
-/** @type {Map<string, {status: string, output?: string, thumbnail?: string, error?: string}>} */
+/**
+ * @type {Map<string, {status: string, output?: string, thumbnail?: string,
+ *   error?: string, headline_lines?: string[], font_size?: number, overflow?: boolean}>}
+ */
 const jobs = new Map();
 
 function json(res, status, body) {
@@ -51,6 +55,58 @@ function readBody(req) {
   });
 }
 
+async function download(url, file) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+  return file;
+}
+
+/**
+ * Рендер Reels: видео-подложка + заголовок поверх кадра на всю длительность.
+ * manifest: { type: "reel", video_url: string, headline: string,
+ *             max_duration?: number, max_lines?: number, headline_top?: number,
+ *             width?: number, height?: number, font_file?: string }
+ */
+async function renderReelJob(jobId, manifest) {
+  const job = jobs.get(jobId);
+  const dir = path.join(WORK_DIR, jobId);
+  fs.mkdirSync(dir, { recursive: true });
+
+  try {
+    if (!manifest.video_url) throw new Error("video_url is required");
+    if (!String(manifest.headline || "").trim()) {
+      throw new Error("headline is required");
+    }
+
+    const input = await download(manifest.video_url, path.join(dir, "source.mp4"));
+    const output = path.join(dir, "output.mp4");
+    const thumbnail = path.join(dir, "thumbnail.jpg");
+
+    const { args, fontSize, lines, overflow } = prepareReel({
+      dir,
+      input,
+      output,
+      headline: manifest.headline,
+      manifest,
+    });
+
+    await ffmpeg(args);
+    // Обложка — кадр с уже наложенным заголовком, чтобы превью в ленте читалось.
+    await ffmpeg(["-y", "-i", output, "-ss", "1", "-vframes", "1", "-q:v", "3", thumbnail]);
+
+    job.status = "succeeded";
+    job.output = `/files/${jobId}/output.mp4`;
+    job.thumbnail = `/files/${jobId}/thumbnail.jpg`;
+    job.headline_lines = lines;
+    job.font_size = fontSize;
+    job.overflow = overflow;
+  } catch (err) {
+    job.status = "failed";
+    job.error = err instanceof Error ? err.message : String(err);
+  }
+}
+
 /**
  * MVP-рендер: слайдшоу из изображений с наложением текста.
  * manifest: { image_urls: string[], text?: string, duration_per_slide?: number,
@@ -68,11 +124,7 @@ async function renderJob(jobId, manifest) {
     // Скачиваем исходники
     const files = [];
     for (let i = 0; i < images.length; i++) {
-      const res = await fetch(images[i]);
-      if (!res.ok) throw new Error(`Failed to fetch ${images[i]}: ${res.status}`);
-      const file = path.join(dir, `src-${i}.img`);
-      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
-      files.push(file);
+      files.push(await download(images[i], path.join(dir, `src-${i}.img`)));
     }
 
     const duration = Number(manifest.duration_per_slide || 3);
@@ -160,7 +212,11 @@ const server = http.createServer(async (req, res) => {
       const manifest = await readBody(req);
       const jobId = randomUUID();
       jobs.set(jobId, { status: "processing" });
-      renderJob(jobId, manifest);
+      if (manifest.type === "reel") {
+        renderReelJob(jobId, manifest);
+      } else {
+        renderJob(jobId, manifest);
+      }
       return json(res, 202, { job_id: jobId, status: "processing" });
     } catch (err) {
       return json(res, 400, { error: err.message });
