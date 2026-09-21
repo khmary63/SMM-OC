@@ -74,6 +74,35 @@ function titleSimilarity(a, b) {
   return shared / (tokensA.size + tokensB.size - shared);
 }
 
+/** Ниже этой доли латинских букв заголовок считаем чужеязычным. */
+const MIN_LATIN_SHARE = 0.8;
+
+/**
+ * Записан ли заголовок латиницей.
+ *
+ * regionCode и relevanceLanguage у источника — подсказки ранжирования, а не
+ * фильтр: в выдаче по английскому запросу спокойно оказывается хинди или
+ * японский. Такой хук для англоязычной ленты бесполезен.
+ *
+ * Хэштеги выбрасываются до подсчёта: они почти всегда латинские независимо от
+ * языка ролика, и гроздь «#HealthTips #YouTubeShorts #Shorts» перевешивает
+ * короткий заголовок на хинди. Хук — это прозаическая часть, её и меряем.
+ *
+ * Считается доля, а не факт наличия: одно латинское слово внутри чужеязычного
+ * заголовка встречается сплошь и рядом, и наоборот — «нет чужих букв» отсекло
+ * бы английский хук со случайным символом. Заголовок, где после чистки не
+ * осталось букв (одни эмодзи и теги), хуком не является.
+ */
+function isLatinTitle(title, minShare = MIN_LATIN_SHARE) {
+  const withoutTags = String(title).replace(/#\S+/gu, " ");
+  const letters = withoutTags.match(/\p{L}/gu) || [];
+  if (letters.length === 0) return false;
+
+  const latin = letters.filter((ch) => /\p{Script=Latin}/u.test(ch)).length;
+
+  return latin / letters.length >= minShare;
+}
+
 /**
  * Убирает кандидатов, чей заголовок слишком похож на уже опубликованный
  * или на другого кандидата из этой же выборки.
@@ -116,22 +145,25 @@ function rank(candidates, now = new Date()) {
 }
 
 /**
- * Полный отбор: ранжирование, отсев повторов, обрезка до limit.
+ * Полный отбор: отсев чужеязычных, ранжирование, отсев повторов, обрезка.
  *
  * Порядок важен — сначала ранжируем, потом дедуплицируем, чтобы из группы
  * похожих заголовков остался самый вирусный, а не случайный.
  */
 function selectTop(candidates, { publishedTitles = [], limit = 10, threshold = 0.6, now } = {}) {
-  const ranked = rank(candidates, now);
+  const latin = candidates.filter((c) => isLatinTitle(c.title));
+  const ranked = rank(latin, now);
   return dedupe(ranked, publishedTitles, threshold).slice(0, limit);
 }
 
 module.exports = {
   computeViewsPerHour,
   normalizeTitle,
+  isLatinTitle,
   titleSimilarity,
   dedupe,
   rank,
   selectTop,
   MIN_AGE_HOURS,
+  MIN_LATIN_SHARE,
 };

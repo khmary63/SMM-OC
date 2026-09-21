@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   computeViewsPerHour,
   normalizeTitle,
+  isLatinTitle,
   titleSimilarity,
   dedupe,
   rank,
@@ -122,6 +123,38 @@ test("selectTop обрезает до limit", () => {
   assert.equal(selectTop(many, { limit: 3, now: NOW }).length, 3);
   // без limit проходят все пять — значит обрезал именно limit, а не дедупликация
   assert.equal(selectTop(many, { now: NOW }).length, 5);
+});
+
+test("isLatinTitle пропускает английский хук с эмодзи и хэштегами", () => {
+  assert.ok(isLatinTitle("😳 The Morning Habit That Changed Everything #shorts"));
+});
+
+test("isLatinTitle отсеивает чужеязычные заголовки из живой выдачи", () => {
+  // реальные заголовки, протёкшие через relevanceLanguage=en
+  assert.ok(!isLatinTitle("💊 कमजोरी और थकान के लिए 3 Best Multivitamins! #HealthTips"));
+  assert.ok(!isLatinTitle("【看護師】 看護師の平均月収の闇 #看護師あるある #フリーランス"));
+  assert.ok(!isLatinTitle("إزاي ترجع مفاصلك سليمة؟ 💪"));
+});
+
+test("isLatinTitle не даёт латинским хэштегам перевесить чужой заголовок", () => {
+  assert.ok(
+    !isLatinTitle("कमजोरी और थकान #Multivitamin #Tips #HealthTips #YouTubeShorts #Shorts")
+  );
+});
+
+test("isLatinTitle отсеивает заголовок без букв", () => {
+  assert.ok(!isLatinTitle("🔥🔥🔥"));
+  assert.ok(!isLatinTitle("#shorts #viral"));
+  assert.ok(!isLatinTitle(""));
+});
+
+test("selectTop выбрасывает чужеязычных кандидатов", () => {
+  const english = candidate({ id: "en", title: "How I Lost 20 Pounds Without A Gym" });
+  const hindi = candidate({ id: "hi", title: "बिना जिम के वेट लॉस एक्सरसाइज Workout" });
+
+  const top = selectTop([hindi, english], { now: NOW });
+
+  assert.deepEqual(top.map((c) => c.id), ["en"]);
 });
 
 test("selectNiches без фильтра возвращает все ниши", () => {
