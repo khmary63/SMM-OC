@@ -25,6 +25,14 @@ const DEFAULTS = {
   maxLines: 4,
   headlineTop: 0.2,
   fontSizes: [104, 96, 88, 80, 72, 64, 58, 52],
+  // Потолок битрейта. Один crf даёт непредсказуемый размер: на спокойной
+  // подложке выйдет 8 МБ, на зернистой минуте — за 60. Потолок держит
+  // минутный ролик в ~38 МБ, то есть внутри лимита Telegram-бота (50 МБ),
+  // которым рилс уходит Марии. Для Instagram это тоже рекомендуемые ~5 Мбит/с,
+  // так что качеством не жертвуем: на обычном материале crf 20 ниже потолка
+  // и планка просто не срабатывает.
+  maxrate: "5M",
+  bufsize: "10M",
 };
 
 /**
@@ -139,6 +147,8 @@ function buildReelArgs({ input, output, textFile, fontFile, fontSize, lineCount,
     "-c:v", "libx264",
     "-preset", "medium",
     "-crf", "20",
+    "-maxrate", opts.maxrate,
+    "-bufsize", opts.bufsize,
     "-profile:v", "high",
     "-level", "4.1",
     "-c:a", "aac",
@@ -162,6 +172,8 @@ function prepareReel({ dir, input, output, headline, manifest = {} }) {
     maxDuration: Number(manifest.max_duration || DEFAULTS.maxDuration),
     maxLines: Number(manifest.max_lines || DEFAULTS.maxLines),
     headlineTop: Number(manifest.headline_top || DEFAULTS.headlineTop),
+    maxrate: manifest.maxrate || DEFAULTS.maxrate,
+    bufsize: manifest.bufsize || DEFAULTS.bufsize,
   };
 
   const fontFile = manifest.font_file || DEFAULT_FONT;
