@@ -148,6 +148,39 @@ function resolveKnowledgeFiles(files) {
   return resolved;
 }
 
+/** Содержимое файла Drive как текст. */
+async function readFileText(fileId, { accessToken, fetchImpl = fetch } = {}) {
+  if (!accessToken) throw new Error("accessToken is required");
+
+  const res = await fetchImpl(downloadUrl(fileId), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Drive API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+
+  return res.text();
+}
+
+/**
+ * Базы знаний из папки «инструкции» — готовые тексты под ключами KNOWLEDGE_FILES.
+ * Это то, что generate.js подставляет в промпты.
+ */
+async function fetchKnowledge({ accessToken, fetchImpl = fetch } = {}) {
+  const files = resolveKnowledgeFiles(
+    await listFolder(INSTRUCTIONS_FOLDER_ID, { accessToken, fetchImpl })
+  );
+
+  const texts = await Promise.all(
+    Object.entries(files).map(async ([key, file]) => [
+      key,
+      await readFileText(file.id, { accessToken, fetchImpl }),
+    ])
+  );
+
+  return Object.fromEntries(texts);
+}
+
 module.exports = {
   BACKGROUNDS_FOLDER_ID,
   INSTRUCTIONS_FOLDER_ID,
@@ -160,4 +193,6 @@ module.exports = {
   pickBackground,
   downloadUrl,
   resolveKnowledgeFiles,
+  readFileText,
+  fetchKnowledge,
 };

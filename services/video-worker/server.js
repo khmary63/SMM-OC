@@ -55,8 +55,13 @@ function readBody(req) {
   });
 }
 
-async function download(url, file) {
-  const res = await fetch(url);
+/**
+ * headers нужны для приватных источников: ссылка Google Drive alt=media
+ * отдаёт файл только с Authorization, а без него — HTML страницы входа,
+ * на котором ffmpeg падает с невнятной ошибкой формата.
+ */
+async function download(url, file, headers) {
+  const res = await fetch(url, headers ? { headers } : undefined);
   if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
   fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
   return file;
@@ -65,6 +70,7 @@ async function download(url, file) {
 /**
  * Рендер Reels: видео-подложка + заголовок поверх кадра на всю длительность.
  * manifest: { type: "reel", video_url: string, headline: string,
+ *             video_headers?: Record<string, string>,
  *             max_duration?: number, max_lines?: number, headline_top?: number,
  *             width?: number, height?: number, font_file?: string }
  */
@@ -79,7 +85,11 @@ async function renderReelJob(jobId, manifest) {
       throw new Error("headline is required");
     }
 
-    const input = await download(manifest.video_url, path.join(dir, "source.mp4"));
+    const input = await download(
+      manifest.video_url,
+      path.join(dir, "source.mp4"),
+      manifest.video_headers
+    );
     const output = path.join(dir, "output.mp4");
     const thumbnail = path.join(dir, "thumbnail.jpg");
 

@@ -23,6 +23,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# состояние пайплайна рилсов: история хуков и занятых подложек
+services/reels-pipeline/.state.json
+
 # misc
 .DS_Store
 *.log
