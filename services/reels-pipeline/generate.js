@@ -16,11 +16,21 @@ const POST_MIN_CHARS = 1700;
 const POST_MAX_CHARS = 1900;
 
 /**
- * Бюджет надписи на видео. Рендер подбирает кегль сам, но на трёх строках
- * при 1080×1920 читаемым остаётся примерно столько символов; дальше текст
- * мельчает до нечитаемого в ленте.
+ * Бюджет надписи на видео. Цифры не выдуманы — замерены прогоном реального
+ * раскладчика из services/video-worker/reel.js на кадре 1080×1920:
+ * до 100 символов текст укладывается в четыре строки, со 105 уходит в пять.
+ *
+ * Четыре строки — предел, две — цель: чем короче надпись, тем крупнее кегль
+ * и тем лучше она читается в ленте.
+ *
+ * Проверка здесь предварительная, чтобы не тратить рендер впустую. Последнее
+ * слово за самим рендером: он возвращает фактическое число строк и флаг
+ * overflow, и это авторитетнее оценки по символам.
  */
-const OVERLAY_MAX_CHARS = 90;
+const OVERLAY_MAX_CHARS = 100;
+
+/** До этой длины надпись укладывается в одну-две строки самым крупным кеглем. */
+const OVERLAY_COMPACT_CHARS = 30;
 
 const RETRIES = 2;
 
@@ -51,7 +61,13 @@ function validatePost(text) {
   return { ok: problems.length === 0, problems, chars };
 }
 
-/** Проверяет надпись, которая ляжет на видео. */
+/**
+ * Проверяет надпись, которая ляжет на видео.
+ *
+ * `ok` — жёсткий предел: за ним надпись не влезает в четыре строки.
+ * `compact` — пожелание: надпись укладывается в одну-две строки.
+ * Длинная, но валидная надпись публикуется, просто более мелким кеглем.
+ */
 function validateOverlay(text) {
   const chars = countChars(text);
   const problems = [];
@@ -60,12 +76,17 @@ function validateOverlay(text) {
   if (chars > OVERLAY_MAX_CHARS) {
     problems.push(
       `надпись длиннее ${OVERLAY_MAX_CHARS} символов (сейчас ${chars}) — ` +
-        "на видео станет нечитаемой"
+        "не влезет в четыре строки"
     );
   }
   if (!hasCapsWord(text)) problems.push("нет слова капсом");
 
-  return { ok: problems.length === 0, problems, chars };
+  return {
+    ok: problems.length === 0,
+    compact: chars > 0 && chars <= OVERLAY_COMPACT_CHARS,
+    problems,
+    chars,
+  };
 }
 
 /**
@@ -117,11 +138,32 @@ async function generateHeadline({ trend, knowledge, llm = chat, options }) {
     "",
     "Верни ровно две строки без пояснений:",
     "HEADLINE: полный заголовок для подписи к посту",
-    `OVERLAY: та же мысль как надпись на видео, до ${OVERLAY_MAX_CHARS} символов, одна строка, со словом капсом`,
+    `OVERLAY: та же мысль как надпись на видео — до ${OVERLAY_COMPACT_CHARS} символов, ` +
+      `жёсткий предел ${OVERLAY_MAX_CHARS}. Чем короче, тем крупнее шрифт на кадре. ` +
+      "Одна строка, со словом капсом, без потери провокации.",
   ].join("\n");
 
-  const raw = await llm(system, user, { maxTokens: 500, ...options });
-  return parseHeadline(raw);
+  let parsed = parseHeadline(await llm(system, user, { maxTokens: 500, ...options }));
+
+  // Надпись за пределом или просто длинная — одна попытка сжать.
+  // Дальше не давим: укоротить можно и ценой смысла, а это хуже мелкого шрифта.
+  if (!parsed.overlayCheck.ok || !parsed.overlayCheck.compact) {
+    const retry = [
+      user,
+      "",
+      `Предыдущая надпись была на ${parsed.overlayCheck.chars} символов: «${parsed.overlay}».`,
+      `Сожми её до ${OVERLAY_COMPACT_CHARS} символов, сохранив провокацию и слово капсом.`,
+      "HEADLINE оставь прежним.",
+    ].join("\n");
+
+    const second = parseHeadline(await llm(system, retry, { maxTokens: 500, ...options }));
+    // Берём вторую версию, только если она действительно лучше.
+    if (second.overlayCheck.ok && second.overlayCheck.chars < parsed.overlayCheck.chars) {
+      parsed = { ...second, headline: parsed.headline };
+    }
+  }
+
+  return parsed;
 }
 
 /** Разбирает ответ модели на заголовок и надпись. */
@@ -219,4 +261,5 @@ module.exports = {
   POST_MAX_CHARS,
   OVERLAY_MAX_CHARS,
   RETRIES,
+  OVERLAY_COMPACT_CHARS,
 };

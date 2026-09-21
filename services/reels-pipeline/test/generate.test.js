@@ -11,6 +11,8 @@ const {
   POST_MIN_CHARS,
   POST_MAX_CHARS,
   OVERLAY_MAX_CHARS,
+  OVERLAY_COMPACT_CHARS,
+  generateHeadline,
 } = require("../generate");
 const { config, assertAsciiKey } = require("../llm");
 
@@ -53,11 +55,27 @@ test("validatePost принимает ровно граничные значен
   assert.equal(validatePost(postOfLength(POST_MAX_CHARS)).ok, true);
 });
 
-test("validateOverlay бракует слишком длинную надпись", () => {
+test("validateOverlay бракует надпись, не влезающую в четыре строки", () => {
   const long = "СЛОВО " + "длинная надпись ".repeat(10);
   const check = validateOverlay(long);
   assert.equal(check.ok, false);
-  assert.match(check.problems.join(" "), /нечитаемой/);
+  assert.match(check.problems.join(" "), /четыре строки/);
+});
+
+test("validateOverlay пропускает длинную, но укладывающуюся надпись", () => {
+  // 100 символов — замеренный предел четырёх строк; это ещё можно публиковать
+  const text = "ЭТА " + "а".repeat(OVERLAY_MAX_CHARS - 4);
+  const check = validateOverlay(text);
+  assert.equal(check.chars, OVERLAY_MAX_CHARS);
+  assert.equal(check.ok, true, "валидная надпись забракована");
+  assert.equal(check.compact, false, "длинная надпись помечена компактной");
+});
+
+test("validateOverlay отмечает компактную надпись отдельно от валидной", () => {
+  const short = validateOverlay("Эта привычка УБИВАЕТ сон");
+  assert.equal(short.ok, true);
+  assert.equal(short.compact, true);
+  assert.ok(short.chars <= OVERLAY_COMPACT_CHARS);
 });
 
 test("validateOverlay требует слово капсом", () => {
@@ -178,6 +196,48 @@ test("generateReel проверяет и английскую надпись, а
   assert.equal(reel.checks.overlay.ok, true);
   assert.equal(reel.checks.overlayEn.ok, false, "раздутый перевод прошёл проверку");
   assert.ok(reel.checks.overlayEn.chars > OVERLAY_MAX_CHARS);
+});
+
+test("generateHeadline просит сжать длинную надпись и берёт короткую версию", async () => {
+  const prompts = [];
+  let call = 0;
+  const llm = async (_s, user) => {
+    prompts.push(user);
+    return call++ === 0
+      ? "HEADLINE: Полный заголовок ТУТ:\nOVERLAY: Эта совершенно НЕВЕРОЯТНО длинная надпись про сон и привычки"
+      : "HEADLINE: Другой заголовок:\nOVERLAY: Эта привычка УБИВАЕТ сон";
+  };
+
+  const result = await generateHeadline({ trend: TREND, knowledge: KNOWLEDGE, llm });
+
+  assert.equal(result.overlay, "Эта привычка УБИВАЕТ сон");
+  assert.equal(result.overlayCheck.compact, true);
+  // HEADLINE берётся из первой попытки — сжимали только надпись
+  assert.equal(result.headline, "Полный заголовок ТУТ:");
+  assert.match(prompts[1], /Сожми её/);
+});
+
+test("generateHeadline не ухудшает надпись, если сжатие вышло хуже", async () => {
+  let call = 0;
+  const llm = async () =>
+    call++ === 0
+      ? "HEADLINE: Заголовок ТУТ:\nOVERLAY: Довольно длинная НАДПИСЬ про привычки и сон"
+      : "HEADLINE: Заголовок ТУТ:\nOVERLAY: " + "ещё длиннее ".repeat(12) + "КАПС";
+
+  const result = await generateHeadline({ trend: TREND, knowledge: KNOWLEDGE, llm });
+
+  assert.match(result.overlay, /Довольно длинная НАДПИСЬ/, "взяли версию хуже первой");
+});
+
+test("generateHeadline не тратит вторую попытку на уже компактную надпись", async () => {
+  let calls = 0;
+  const llm = async () => {
+    calls++;
+    return "HEADLINE: Заголовок ТУТ:\nOVERLAY: Эта привычка УБИВАЕТ сон";
+  };
+
+  await generateHeadline({ trend: TREND, knowledge: KNOWLEDGE, llm });
+  assert.equal(calls, 1);
 });
 
 test("config берёт провайдера и модель из окружения", () => {
